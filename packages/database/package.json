@@ -1,0 +1,28 @@
+{
+  "name": "@omc-erp/database",
+  "version": "1.0.0",
+  "description": "Database configuration and entities for OMC ERP",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typeorm": "typeorm-ts-node-commonjs",
+    "db:generate": "npm run typeorm migration:generate -- -d ./src/data-source.ts",
+    "db:migrate": "npm run typeorm migration:run -- -d ./src/data-source.ts",
+    "db:revert": "npm run typeorm migration:revert -- -d ./src/data-source.ts",
+    "db:seed": "ts-node ./src/seeds/run-seed.ts"
+  },
+  "dependencies": {
+    "@omc-erp/shared-types": "workspace:*",
+    "pg": "^8.11.3",
+    "reflect-metadata": "^0.1.14",
+    "typeorm": "^0.3.17"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

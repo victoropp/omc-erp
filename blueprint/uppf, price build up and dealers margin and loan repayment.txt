@@ -1,0 +1,265 @@
+1) What the UPPF is (and how it actually works for OMCs)
+Purpose. Ghana keeps pump prices geographically uniform by embedding a UPPF margin in the price and then reimbursing transport differentials so remote stations aren’t penalized by distance. The NPA runs the scheme. 
+National Petroleum Authority(NPA)
+
+Mechanics. In “normal” markets distance would vary prices; in Ghana, the UPPF adds a margin to the PBU and then pays OMCs/transporters for distribution cost beyond an equalisation point (distance threshold). Parliamentary records explicitly describe UPPF pays OMCs based on distance beyond the “Equalisation Point.” 
+National Petroleum Authority(NPA)
+Parliament Repository
+
+Governance/legal hooks. The NPA Act, 2005 (Act 691) establishes UPPF governance; the UPPF Management Committee can recommend amending the UPPF margin in the PBU when mileage rates change. Pricing structure and defined margins also sit under L.I. 2186 (Petroleum Pricing Formula Regulations). 
+Parliament Ghana
+National Petroleum Authority(NPA)
+
+Practical implication for your ERP: treat UPPF as both (1) a PBU component (revenue line collected at pump) and (2) a claims/settlement workflow (reimbursements to OMC/transporters based on actual logistics distances beyond the equalisation point).
+
+(Recent media note the UPPF margin level and transparency debates; rates can change, so never hard-code — load from NPA guidance each window.) 
+MyJoyOnline
+Happy Ghana
+
+2) Petroleum Price Build-Up (PBU): components you must model
+NPA issues pricing guidelines and PBU templates per pricing window (bi-weekly). You need to mirror the official structure. Key buckets: ex-refinery price; taxes/levies/regulatory margins (e.g., Energy Debt Recovery Levy, Road Fund, Price Stabilisation & Recovery Levy, BOST margin, UPPF margin, Fuel-Marking, Primary Distribution); marketing & retail margins (OMC margin, Dealers/Retailers margin) — with current templates/guidance provided by NPA. 
+National Petroleum Authority(NPA)
++2
+National Petroleum Authority(NPA)
++2
+
+For historical context and public breakdowns of Ghana’s levies/margins (helpful labels/definitions), see CBOD and analytical explainers; but use NPA templates as the source of truth at runtime. 
+CBOD Ghana
+Finex Insights
+
+3) Data model (tables/entities) you’ll need
+Master/reference tables (versioned by pricing window):
+
+pbu_components (component_code, name, category: {levy, regulatory_margin, distribution_margin, omc_margin, dealer_margin, other}, unit: {GHS_per_litre, %}, rate_value, effective_from, effective_to, source_doc_id, approval_ref, is_active) ← populate from NPA PBU template. 
+National Petroleum Authority(NPA)
+
+products (PMS, AGO, LPG, etc.), regions/depot_routes, equalisation_points (route_id, km_threshold) for UPPF logic. 
+National Petroleum Authority(NPA)
+Parliament Repository
+
+pricing_windows (window_id, start_dt, end_dt, npa_guideline_doc_id). 
+National Petroleum Authority(NPA)
+
+Transactional tables:
+
+station_prices (station_id, product_id, window_id, ex_pump_price, calc_breakdown_json, published_dt).
+
+sales_txn (station_id, product_id, litres, price, timestamp; carries window_id and snapshot of component rates).
+
+delivery_consignment (depot_id, station_id, product_id, litres_loaded, litres_received, dispatch_dt, route_id, km_actual, gps_trace_id).
+
+uppf_claim (claim_id, window_id, route_id, km_beyond_equalisation, litres_moved, tariff_per_litre_km, amount_due, status, evidence_links).
+
+dealer_settlement (station_id, window_id, litres_sold, dealer_margin_rate, dealer_margin_amount, loan_deduction, net_payable, settled_dt).
+
+Documents/config:
+
+regulatory_docs (doc_id, type: {pricing_guideline, PBU_template, circular}, file_url, hash, uploaded_dt). 
+National Petroleum Authority(NPA)
++1
+
+4) Calculation engine (safe formulas)
+NPA’s Pricing Guidelines (Mar 26, 2024) require OMCs to submit ex-pump prices using the NPA template and PBU structure each window. Implement a deterministic engine that: (a) locks rates by window, (b) computes per-product Ex-Pump Price, and (c) stores the full explainable breakdown. 
+National Petroleum Authority(NPA)
+
+Recommended pseudo-formula (per litre, by product):
+
+cpp
+Copy
+Edit
+ExPump = ExRefinery
+       + Σ(Taxes_Levies)        // ESRL/PSRL, Road Fund, etc.
+       + Σ(Regulatory_Margins)  // BOST, UPPF, Fuel Marking, Primary Distribution
+       + OMC_Margin
+       + Dealer_Margin
+Keep each component parametric from pbu_components (no hard-coding), and store the computed vector alongside the price (for auditability and NPA submissions). 
+National Petroleum Authority(NPA)
++1
+
+FX & ex-refinery: Ex-refinery typically reflects import-parity cost, global benchmarks, and FX (FuFex etc.). Model it as a source figure per window from your procurement module, but allow manual override with a justification and document link to the pricing submission. 
+National Petroleum Authority(NPA)
+Finex Insights
+
+5) UPPF automation: end-to-end workflow inside the ERP
+A. Inputs the engine needs
+
+Current UPPF margin (GHS/L) from pbu_components.
+
+Equalisation logic (km thresholds by route) and official per-km tariff for reimbursement.
+
+Actual logistics evidence: depot→station route, km, GPS trace, waybill, litres moved.
+
+(Use the NPA UPPF page policy as business rules; the equalisation-point payment logic is supported in Parliament’s PAC report. Handle rate updates via governance in Act 691.) 
+National Petroleum Authority(NPA)
+Parliament Repository
+Parliament Ghana
+
+B. Processing steps
+
+At dispatch create delivery_consignment with planned route_id and km_plan.
+
+On trip completion, ingest GPS trace; compute km_actual.
+
+Compute km beyond equalisation: km_excess = max(0, km_actual - equalisation_points.km_threshold).
+
+Compute claim:
+claim_amount = km_excess * litres_delivered * tariff_per_litre_km.
+Populate uppf_claim with links to waybill, GPS, station GRN.
+
+Three-way reconcile: depot load vs. station received vs. transporter trip; flag variances.
+
+Batch submit claim set per window with auto-generated schedules & attachments in NPA-prescribed format.
+
+Post-settlement accounting: credit transporter/OMC control account when NPA pays; variance report if short-paid.
+
+Analytics: route cost heatmap, claims turnaround time, km-per-litre KPIs.
+
+C. AI assists
+
+Route validation model: flag abnormal detours vs historical baselines (possible pilferage).
+
+Anomaly detection: litres delivered vs tank dip vs pump opening stock vs first sales — auto-flag evidence gaps before claim submission.
+
+Tariff reasonableness: model expected reimbursement and alert if actual deviates beyond tolerance (data or rate issue).
+
+6) Dealers’ margin, dealer loan repayment & station settlement
+Dealers’/Retailers’ margin is a defined component in the PBU. Store the margin rate per litre (or fixed GHS/L) by window in pbu_components. Compute daily at station close:
+
+ini
+Copy
+Edit
+dealer_margin_amt_day = sum_over_products( litres_sold(product) * dealer_margin_rate(product, window) )
+Dealer loan repayment automation
+
+Create dealer_loans (loan_id, station_id, principal, rate, tenor, repayment_freq, start_dt, amort_method).
+
+Generate loan_schedule per window/day.
+
+In dealer_settlement, compute:
+
+csharp
+Copy
+Edit
+gross_dealer_margin (from sales)
+- loan_installment_due (from schedule)
+- other deductions (chargebacks, shortages)
+= net_payable_to_dealer
+Post GL entries automatically; deliver a dealer settlement statement each window with the PBU breakdown, loan deduction line, and net payment.
+
+7) Price window operations your agent should implement
+Per NPA Petroleum Products Pricing Guidelines (Mar 26, 2024), OMCs must submit revised ex-pump prices with the NPA PBU template each pricing window, specifying changed components. Build a “Pricing Window Orchestrator” service that: 
+National Petroleum Authority(NPA)
+
+Ingests latest NPA guideline/PBU template docs (operator upload; store hash & link).
+
+Versions all component rates into pbu_components with effective window dates.
+
+Recalculates ex-pump per product/station; snapshots the full vector for audit.
+
+Generates the NPA submission file (exact template), and logs the submission.
+
+Publishes new prices to retail channels (POS, pump controllers) and stores the time of first sale at the new price (compliance evidence).
+
+Tip: margins/levies change (e.g., BOST margin tweaks), so treat every margin as data; never embed constants. 
+bost.com.gh
+
+8) API & rules examples (drop-in)
+Compute ex-pump price (per product/station/window)
+
+css
+Copy
+Edit
+GET /api/pricing/{window_id}/stations/{station_id}/products/{product_id}/ex-pump
+→ {
+  "window_id": "...",
+  "station_id": "...",
+  "product_id": "PMS",
+  "ex_pump_price": 14.327,
+  "components": [
+     {"code":"EXREF", "value": 8.904},
+     {"code":"EDRL",  "value": 0.490},
+     {"code":"ROAD",  "value": 0.840},
+     {"code":"PSRL",  "value": 0.160},
+     {"code":"BOST",  "value": 0.15},
+     {"code":"UPPF",  "value": 0.XXX},
+     {"code":"MARK",  "value": 0.30},   // OMC margin
+     {"code":"DEAL",  "value": 0.35}    // Dealer margin
+  ],
+  "source_docs":[{"doc_id":"NPA-2024-03-26-GUIDE"}]
+}
+(Grounded structure; populate with rates from NPA template each window.) 
+National Petroleum Authority(NPA)
++1
+
+Create UPPF claim from a delivery
+
+bash
+Copy
+Edit
+POST /api/uppf/claims
+{
+ "delivery_id":"DEL-001",
+ "route_id":"R-ACCRA-BONGO",
+ "km_actual": 713.4,
+ "litres_moved": 36_000,
+ "window_id":"2025W15"
+}
+→ ERP fetches equalisation_km, tariff_per_litre_km (by window),
+  attaches GPS/waybill evidence, computes amount_due, status="ready_to_submit"
+Dealer settlement closeout
+
+pgsql
+Copy
+Edit
+POST /api/settlements/dealer/close
+{
+ "station_id":"ST-045",
+ "window_id":"2025W15"
+}
+→ returns statement {gross_margin, loan_installment, other_adj, net_payable}
+9) Controls, compliance & audit you should build in
+Reg source control. Keep a registry of every NPA circular, Guidelines PDF, PBU template used to set rates; attach doc IDs to each computed price and each submission. 
+National Petroleum Authority(NPA)
++1
+
+Window immutability. Once a window closes, lock component rates for that window for audit.
+
+UPPF claim evidence pack. Waybill, GRN, tank dips, GPS polyline, depot weighbridge ticket — bundle per claim; three-way match before submit. (Recent probes on UPPF heighten the need for impeccable audit trails.) 
+OSP Website
+OSP Website
+
+Variance dashboards. Compare expected vs paid UPPF; flag short-pays and aging.
+
+NPA submission tracker. Log who submitted, when, for which window, and response/ack. 
+National Petroleum Authority(NPA)
+
+10) AI features that add real value (beyond automation)
+Demand-aware pricing validator. Use your demand forecast to sanity-check price submissions before filing (e.g., warn if margin cut likely triggers liquidity stress). (Guidelines require stating the PBU driver of changes; auto-generate justification text.) 
+National Petroleum Authority(NPA)
+
+UPPF fraud/route anomaly detector. Learn normal route time/kilometres and litres-in-motion; flag diversions or leak patterns early (reduces rejected claims).
+
+Dealer credit risk & repayment optimizer. Predict dealer cash-flow stress and reschedule loan deductions to avoid stockouts, while still meeting portfolio risk thresholds.
+
+Rates change sentinel. Watch NPA updates and press/bulletins; notify finance to update PBU rates (BOST/UPPF/Primary Distribution) and spin a sandbox recalculation to show P&L impact before publishing. 
+National Petroleum Authority(NPA)
+bost.com.gh
+
+11) Developer checklist (quick wins)
+Load NPA artifacts (Guidelines PDF, current PBU template) into regulatory_docs; parse into pbu_components. 
+National Petroleum Authority(NPA)
++1
+
+Build pricing-window service with “calculate → preview → submit” flow. 
+National Petroleum Authority(NPA)
+
+Implement UPPF claim generator tied to delivery + GPS ingestion and equalisation logic. 
+National Petroleum Authority(NPA)
+Parliament Repository
+
+Implement dealer settlement with loan schedule netting.
+
+Add audit (hash of inputs, before/after), and BI (margins share of pump price; taxes/levies share). Use public breakdowns for UX labels; compute from live NPA rates. 
+CBOD Ghana
+Finex Insights
+
