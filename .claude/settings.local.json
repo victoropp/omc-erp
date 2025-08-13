@@ -18,7 +18,8 @@
       "Bash(timeout:*)",
       "Bash(start http://localhost:3000)",
       "Bash(psql:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(touch:*)"
     ],
     "deny": [],
     "ask": []
