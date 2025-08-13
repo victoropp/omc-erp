@@ -1,0 +1,247 @@
+# Kibana Dashboard for Log Visualization
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-config
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: kibana
+data:
+  kibana.yml: |
+    server.name: kibana
+    server.host: 0.0.0.0
+    server.port: 5601
+    server.publicBaseUrl: "https://logs.erp.omc.gov.gh/kibana/"
+    server.basePath: "/kibana"
+    server.rewriteBasePath: true
+    
+    # Elasticsearch configuration
+    elasticsearch.hosts: ["https://elasticsearch:9200"]
+    elasticsearch.username: "kibana_system"
+    elasticsearch.password: "${KIBANA_PASSWORD}"
+    elasticsearch.ssl.verificationMode: certificate
+    
+    # Security
+    xpack.security.enabled: true
+    xpack.security.encryptionKey: "omc-erp-kibana-encryption-key-32-chars"
+    xpack.security.sessionTimeout: 3600000
+    
+    # Monitoring
+    xpack.monitoring.enabled: true
+    xpack.monitoring.kibana.collection.enabled: true
+    
+    # Advanced settings
+    logging.appenders.default:
+      type: console
+      layout:
+        type: json
+    logging.loggers:
+      - name: http.server.response
+        level: debug
+    
+    # UI settings
+    map.includeElasticMapsService: false
+    telemetry.enabled: false
+    newsfeed.enabled: false
+    
+    # Index patterns
+    kibana.defaultAppId: "discover"
+    
+    # Custom branding
+    xpack.branding.applicationTitle: "OMC ERP Logs"
+    xpack.branding.logo: "/assets/omc-logo.png"
+    
+    # Saved objects encryption
+    xpack.encryptedSavedObjects.encryptionKey: "omc-erp-saved-objects-key-32-chars"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kibana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kibana
+        app.kubernetes.io/component: logging
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kibana
+        image: docker.elastic.co/kibana/kibana:8.10.0
+        ports:
+        - name: http
+          containerPort: 5601
+          protocol: TCP
+        env:
+        - name: KIBANA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-secrets
+              key: KIBANA_PASSWORD
+        - name: ELASTICSEARCH_HOSTS
+          value: "https://elasticsearch:9200"
+        - name: ELASTICSEARCH_USERNAME
+          value: "kibana_system"
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=2048"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/kibana/config/kibana.yml
+          subPath: kibana.yml
+        - name: kibana-data
+          mountPath: /usr/share/kibana/data
+        livenessProbe:
+          httpGet:
+            path: /kibana/api/status
+            port: 5601
+          initialDelaySeconds: 120
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /kibana/api/status
+            port: 5601
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /kibana/api/status
+            port: 5601
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 30
+      volumes:
+      - name: config
+        configMap:
+          name: kibana-config
+      - name: kibana-data
+        persistentVolumeClaim:
+          claimName: kibana-data
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kibana-data
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: kibana
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: logging
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 5601
+    targetPort: 5601
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: kibana
+
+---
+# Kibana Setup Job - Creates index patterns and dashboards
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kibana-setup
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: kibana-setup
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: setup
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Wait for Kibana to be ready
+          until curl -s http://kibana:5601/kibana/api/status | grep -q "available"; do
+            echo "Waiting for Kibana..."
+            sleep 10
+          done
+          
+          sleep 30  # Additional wait for full initialization
+          
+          # Create index pattern
+          curl -X POST "http://kibana:5601/kibana/api/saved_objects/index-pattern/omc-erp-logs" \
+            -H "Content-Type: application/json" \
+            -H "kbn-xsrf: true" \
+            -d '{
+              "attributes": {
+                "title": "omc-erp-*",
+                "timeFieldName": "@timestamp",
+                "fields": "[{\"name\":\"@timestamp\",\"type\":\"date\",\"searchable\":true,\"aggregatable\":true},{\"name\":\"level\",\"type\":\"string\",\"searchable\":true,\"aggregatable\":true},{\"name\":\"service\",\"type\":\"string\",\"searchable\":true,\"aggregatable\":true},{\"name\":\"message\",\"type\":\"string\",\"searchable\":true,\"aggregatable\":false},{\"name\":\"pod\",\"type\":\"string\",\"searchable\":true,\"aggregatable\":true},{\"name\":\"namespace\",\"type\":\"string\",\"searchable\":true,\"aggregatable\":true},{\"name\":\"trace_id\",\"type\":\"string\",\"searchable\":true,\"aggregatable\":true}]"
+              }
+            }'
+          
+          # Set default index pattern
+          curl -X POST "http://kibana:5601/kibana/api/kibana/settings/defaultIndex" \
+            -H "Content-Type: application/json" \
+            -H "kbn-xsrf: true" \
+            -d '{
+              "value": "omc-erp-logs"
+            }'
+          
+          # Create OMC ERP Log Analysis Dashboard
+          curl -X POST "http://kibana:5601/kibana/api/saved_objects/dashboard/omc-erp-dashboard" \
+            -H "Content-Type: application/json" \
+            -H "kbn-xsrf: true" \
+            -d '{
+              "attributes": {
+                "title": "OMC ERP Log Analysis",
+                "type": "dashboard",
+                "description": "Comprehensive log analysis for OMC ERP system",
+                "panelsJSON": "[{\"version\":\"8.10.0\",\"gridData\":{\"x\":0,\"y\":0,\"w\":24,\"h\":15,\"i\":\"1\"},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_1\"}]",
+                "optionsJSON": "{\"useMargins\":true,\"syncColors\":false,\"hidePanelTitles\":false}",
+                "version": 1,
+                "kibanaSavedObjectMeta": {
+                  "searchSourceJSON": "{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
+                }
+              }
+            }'
+          
+          echo "Kibana setup completed successfully"

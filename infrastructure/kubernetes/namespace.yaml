@@ -6,6 +6,12 @@ metadata:
     name: omc-erp
     istio-injection: enabled
     environment: production
+    app.kubernetes.io/name: omc-erp
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    description: "Ghana OMC ERP System Production Namespace"
+    owner: "omc-erp-team"
+    created-by: "infrastructure-team"
 ---
 apiVersion: v1
 kind: Namespace
@@ -15,6 +21,27 @@ metadata:
     name: omc-erp-staging
     istio-injection: enabled
     environment: staging
+    app.kubernetes.io/name: omc-erp
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    description: "Ghana OMC ERP System Staging Namespace"
+    owner: "omc-erp-team"
+    created-by: "infrastructure-team"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omc-erp-dev
+  labels:
+    name: omc-erp-dev
+    istio-injection: enabled
+    environment: development
+    app.kubernetes.io/name: omc-erp
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    description: "Ghana OMC ERP System Development Namespace"
+    owner: "omc-erp-team"
+    created-by: "infrastructure-team"
 ---
 apiVersion: v1
 kind: Namespace
@@ -23,3 +50,19 @@ metadata:
   labels:
     name: omc-erp-monitoring
     environment: production
+    app.kubernetes.io/name: monitoring
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    description: "Monitoring and observability namespace"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omc-erp-logging
+  labels:
+    name: omc-erp-logging
+    environment: production
+    app.kubernetes.io/name: logging
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    description: "Centralized logging namespace"

@@ -1,0 +1,572 @@
+# Comprehensive CI Pipeline for OMC ERP System
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop, 'feature/*', 'hotfix/*' ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '18.x'
+  PYTHON_VERSION: '3.11'
+  REGISTRY: ghcr.io
+  IMAGE_NAME_PREFIX: omc-erp
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==============================================
+  # CODE QUALITY AND SECURITY CHECKS
+  # ==============================================
+  code-quality:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: |
+        npm ci --prefer-offline --no-audit
+        
+    - name: Lint JavaScript/TypeScript
+      run: |
+        npm run lint
+        
+    - name: Format check
+      run: |
+        npm run format:check
+        
+    - name: Type check
+      run: |
+        npm run type-check
+        
+    - name: Security audit
+      run: |
+        npm audit --audit-level=high --production
+        
+    - name: License check
+      run: |
+        npx license-checker --onlyAllow 'MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD'
+        
+    - name: Dependency vulnerability scan
+      uses: securecodewarrior/github-action-add-sarif@v1
+      with:
+        sarif-file: 'vulnerability-scan-results.sarif'
+      continue-on-error: true
+      
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      continue-on-error: true
+
+  # ==============================================
+  # UNIT AND INTEGRATION TESTS
+  # ==============================================
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: code-quality
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: omc_erp_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    strategy:
+      matrix:
+        service:
+          - api-gateway
+          - auth-service
+          - transaction-service
+          - station-service
+          - pricing-service
+          - uppf-service
+          - configuration-service
+          - accounting-service
+          - inventory-service
+          - customer-service
+          - fleet-service
+          - payment-service
+          - regulatory-service
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci --prefer-offline --no-audit
+      
+    - name: Wait for services
+      run: |
+        timeout 60 bash -c 'until printf "" 2>>/dev/null >>/dev/tcp/$0/$1; do sleep 1; done' localhost 5432
+        timeout 60 bash -c 'until printf "" 2>>/dev/null >>/dev/tcp/$0/$1; do sleep 1; done' localhost 6379
+        
+    - name: Run database migrations
+      run: |
+        cd packages/database
+        npm run migrate:test
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: omc_erp_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+        
+    - name: Run unit tests
+      run: |
+        cd services/${{ matrix.service }}
+        npm run test:unit -- --coverage
+      env:
+        NODE_ENV: test
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: omc_erp_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+        JWT_SECRET: test_jwt_secret
+        
+    - name: Run integration tests
+      run: |
+        cd services/${{ matrix.service }}
+        npm run test:integration
+      env:
+        NODE_ENV: test
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: omc_erp_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+        
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./services/${{ matrix.service }}/coverage/lcov.info
+        flags: backend,${{ matrix.service }}
+        name: ${{ matrix.service }}-coverage
+        fail_ci_if_error: false
+
+  # ==============================================
+  # FRONTEND TESTS
+  # ==============================================
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: code-quality
+    
+    strategy:
+      matrix:
+        app: [dashboard, mobile]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci --prefer-offline --no-audit
+      
+    - name: Build application
+      run: |
+        cd apps/${{ matrix.app }}
+        npm run build
+      env:
+        NODE_ENV: production
+        NEXT_PUBLIC_API_URL: https://api.test.omc.gov.gh
+        
+    - name: Run tests
+      run: |
+        cd apps/${{ matrix.app }}
+        npm run test -- --coverage --watchAll=false
+        
+    - name: E2E Tests (Playwright)
+      if: matrix.app == 'dashboard'
+      run: |
+        cd apps/dashboard
+        npx playwright install --with-deps
+        npm run test:e2e
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ${{ matrix.app }}-test-results
+        path: |
+          apps/${{ matrix.app }}/test-results/
+          apps/${{ matrix.app }}/playwright-report/
+        retention-days: 30
+
+  # ==============================================
+  # PYTHON SERVICES TESTS (ML Platform)
+  # ==============================================
+  test-python:
+    name: Python Services Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: code-quality
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        cd services/ml-platform
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        
+    - name: Lint with flake8
+      run: |
+        cd services/ml-platform
+        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Type check with mypy
+      run: |
+        cd services/ml-platform
+        mypy src/
+        
+    - name: Test with pytest
+      run: |
+        cd services/ml-platform
+        pytest --cov=src --cov-report=xml --cov-report=html
+        
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./services/ml-platform/coverage.xml
+        flags: python,ml-platform
+        name: ml-platform-coverage
+
+  # ==============================================
+  # SECURITY SCANNING
+  # ==============================================
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test-backend, test-frontend, test-python]
+    
+    permissions:
+      security-events: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+        
+    - name: OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'omc-erp'
+        path: '.'
+        format: 'ALL'
+        
+    - name: Upload OWASP results
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-check-report
+        path: reports/
+        retention-days: 30
+
+  # ==============================================
+  # DATABASE MIGRATION TESTS
+  # ==============================================
+  test-migrations:
+    name: Database Migration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: code-quality
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: migration_test
+          POSTGRES_PASSWORD: migration_test
+          POSTGRES_DB: migration_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      timescaledb:
+        image: timescale/timescaledb:latest-pg15
+        env:
+          POSTGRES_USER: timescale_test
+          POSTGRES_PASSWORD: timescale_test
+          POSTGRES_DB: timescale_test
+        ports:
+          - 5433:5432
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        
+    - name: Wait for databases
+      run: |
+        timeout 60 bash -c 'until printf "" 2>>/dev/null >>/dev/tcp/$0/$1; do sleep 1; done' localhost 5432
+        timeout 60 bash -c 'until printf "" 2>>/dev/null >>/dev/tcp/$0/$1; do sleep 1; done' localhost 5433
+        
+    - name: Test PostgreSQL migrations
+      run: |
+        cd packages/database
+        npm ci
+        npm run migrate:up -- --env=test
+        npm run migrate:down -- --env=test --steps=3
+        npm run migrate:up -- --env=test
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: migration_test
+        DB_USER: migration_test
+        DB_PASSWORD: migration_test
+        
+    - name: Test TimescaleDB setup
+      run: |
+        cd packages/database
+        npm run setup:timescale -- --env=test
+      env:
+        TIMESCALE_HOST: localhost
+        TIMESCALE_PORT: 5433
+        TIMESCALE_DB: timescale_test
+        TIMESCALE_USER: timescale_test
+        TIMESCALE_PASSWORD: timescale_test
+
+  # ==============================================
+  # DOCKER BUILD TESTS
+  # ==============================================
+  test-docker-builds:
+    name: Docker Build Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [test-backend, test-frontend, test-python]
+    
+    strategy:
+      matrix:
+        service:
+          - api-gateway
+          - auth-service
+          - transaction-service
+          - pricing-service
+          - dashboard
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ${{ matrix.service == 'dashboard' && 'apps/dashboard/Dockerfile' || format('services/{0}/Dockerfile', matrix.service) }}
+        push: false
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_PREFIX }}/${{ matrix.service }}:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+        
+    - name: Test Docker image
+      run: |
+        docker run --rm -d --name test-${{ matrix.service }} \
+          -p 3000:3000 \
+          -e NODE_ENV=test \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_PREFIX }}/${{ matrix.service }}:test
+        
+        # Wait for service to start
+        sleep 10
+        
+        # Basic health check
+        if [ "${{ matrix.service }}" = "dashboard" ]; then
+          curl -f http://localhost:3000 || exit 1
+        else
+          curl -f http://localhost:3000/health || exit 1
+        fi
+        
+        docker stop test-${{ matrix.service }}
+
+  # ==============================================
+  # KUBERNETES MANIFESTS VALIDATION
+  # ==============================================
+  validate-k8s:
+    name: Kubernetes Manifests Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: code-quality
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+        
+    - name: Install kubeval
+      run: |
+        wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+        tar xf kubeval-linux-amd64.tar.gz
+        sudo cp kubeval /usr/local/bin
+        
+    - name: Validate Kubernetes manifests
+      run: |
+        find infrastructure/kubernetes -name '*.yaml' -exec kubeval {} \;
+        
+    - name: Install Kustomize
+      run: |
+        curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+        sudo mv kustomize /usr/local/bin/
+        
+    - name: Validate Kustomize overlays
+      run: |
+        cd infrastructure/kubernetes/overlays/production
+        kustomize build . | kubeval
+
+  # ==============================================
+  # PERFORMANCE TESTS
+  # ==============================================
+  performance-test:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test-docker-builds]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        
+    - name: Install k6
+      run: |
+        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+        echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+        sudo apt-get update
+        sudo apt-get install k6
+        
+    - name: Run performance tests
+      run: |
+        cd tests/performance
+        k6 run --out json=results.json api-load-test.js
+        
+    - name: Upload performance results
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-test-results
+        path: tests/performance/results.json
+        retention-days: 30
+
+  # ==============================================
+  # GENERATE CI REPORT
+  # ==============================================
+  ci-report:
+    name: Generate CI Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [test-backend, test-frontend, test-python, security-scan, test-migrations, test-docker-builds, validate-k8s]
+    if: always()
+    
+    steps:
+    - name: Generate CI Summary
+      run: |
+        echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Backend Tests | ${{ needs.test-backend.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Frontend Tests | ${{ needs.test-frontend.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Python Tests | ${{ needs.test-python.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Migration Tests | ${{ needs.test-migrations.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Builds | ${{ needs.test-docker-builds.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| K8s Validation | ${{ needs.validate-k8s.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Pipeline completed at: $(date)" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,387 @@
+# OMC ERP Performance and Load Testing Configuration
+# Comprehensive load testing scenarios for Ghana OMC ERP System
+
+config:
+  target: 'http://localhost:3001'
+  phases:
+    # Warm-up phase - gradually increase load
+    - duration: 60
+      arrivalRate: 5
+      name: "Warm-up phase"
+    
+    # Ramp-up phase - increase to target load
+    - duration: 120
+      arrivalRate: 10
+      rampTo: 50
+      name: "Ramp-up phase"
+    
+    # Sustained load phase - maintain high load
+    - duration: 300
+      arrivalRate: 50
+      name: "Sustained load phase"
+    
+    # Peak load phase - stress test
+    - duration: 180
+      arrivalRate: 50
+      rampTo: 100
+      name: "Peak load phase"
+    
+    # Spike test - sudden load increase
+    - duration: 60
+      arrivalRate: 200
+      name: "Spike test phase"
+    
+    # Recovery phase - gradual decrease
+    - duration: 120
+      arrivalRate: 100
+      rampTo: 10
+      name: "Recovery phase"
+
+  # Global configuration
+  defaults:
+    headers:
+      'Content-Type': 'application/json'
+      'Accept': 'application/json'
+      'User-Agent': 'OMC-ERP-LoadTest/1.0'
+  
+  # Environment variables
+  variables:
+    apiVersion: 'v1'
+    tenantId: 'load-test-tenant'
+    testUserCount: 100
+    maxResponseTime: 2000
+    maxErrorRate: 0.05
+    
+  # Performance thresholds
+  ensure:
+    # Response time thresholds
+    - max: 2000  # 2 seconds max response time
+      p99: 1500  # 99th percentile under 1.5 seconds
+      p95: 1000  # 95th percentile under 1 second
+      median: 500  # Median under 500ms
+    
+    # Error rate threshold
+    - maxErrorRate: 0.05  # Less than 5% error rate
+    
+    # Throughput requirements
+    - minThoughput: 100  # At least 100 requests/second
+
+  # Metrics collection
+  plugins:
+    # Enable metrics collection
+    metrics-by-endpoint:
+      useOnlyRequestNames: true
+    
+    # HLS (HTTP Load Simulator) plugin for advanced scenarios
+    hls:
+      # Record response times by endpoint
+      responseTimeByEndpoint: true
+      # Record custom metrics
+      customMetrics:
+        - name: 'pricing_calculation_time'
+          expression: 'pricing.response_time'
+        - name: 'transaction_processing_time'
+          expression: 'transaction.response_time'
+        - name: 'uppf_claim_processing_time'
+          expression: 'uppf.response_time'
+    
+    # Custom reporting
+    publish-metrics:
+      - type: 'statsd'
+        host: 'localhost'
+        port: 8125
+        prefix: 'omc-erp.loadtest'
+
+# Test scenarios
+scenarios:
+  # Authentication Load Test
+  - name: "Authentication Flow Load Test"
+    weight: 20
+    flow:
+      - post:
+          url: "/api/{{ apiVersion }}/auth/register"
+          json:
+            email: "loadtest-{{ $randomString() }}@omc-erp.com"
+            password: "LoadTest123!"
+            firstName: "Load"
+            lastName: "Test"
+            username: "loadtest-{{ $randomString() }}"
+            tenantId: "{{ tenantId }}"
+          capture:
+            - json: $.user.id
+              as: userId
+            - json: $.accessToken
+              as: accessToken
+            - json: $.refreshToken
+              as: refreshToken
+          think: 1
+          expect:
+            - statusCode: 201
+            - contentType: json
+            - hasProperty: 'accessToken'
+
+      - post:
+          url: "/api/{{ apiVersion }}/auth/login"
+          json:
+            username: "{{ username }}"
+            password: "LoadTest123!"
+            tenantId: "{{ tenantId }}"
+          capture:
+            - json: $.accessToken
+              as: newAccessToken
+          think: 2
+          expect:
+            - statusCode: 200
+            - hasProperty: 'accessToken'
+
+      - get:
+          url: "/api/{{ apiVersion }}/auth/profile"
+          headers:
+            Authorization: "Bearer {{ newAccessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+            - hasProperty: 'id'
+
+      - post:
+          url: "/api/{{ apiVersion }}/auth/refresh"
+          json:
+            refreshToken: "{{ refreshToken }}"
+          capture:
+            - json: $.accessToken
+              as: refreshedToken
+          think: 1
+          expect:
+            - statusCode: 200
+
+  # Pricing Module Load Test
+  - name: "Pricing Operations Load Test"
+    weight: 25
+    beforeRequest: "authenticateUser"
+    flow:
+      - get:
+          url: "/api/{{ apiVersion }}/pricing/windows"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+            - contentType: json
+
+      - post:
+          url: "/api/{{ apiVersion }}/pricing/windows"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          json:
+            windowId: "LOAD-PW-{{ $timestamp() }}-{{ $randomNumber(1, 1000) }}"
+            name: "Load Test Pricing Window {{ $randomString() }}"
+            description: "Automated load test pricing window"
+            startDate: "{{ $formatDate($now(), 'YYYY-MM-DD') }}T00:00:00.000Z"
+            endDate: "{{ $formatDate($addDays($now(), 7), 'YYYY-MM-DD') }}T23:59:59.999Z"
+          capture:
+            - json: $.windowId
+              as: createdWindowId
+          think: 2
+          expect:
+            - statusCode: 201
+            - hasProperty: 'windowId'
+
+      - post:
+          url: "/api/{{ apiVersion }}/pricing/stations/{{ $randomChoice(['STATION-001', 'STATION-002', 'STATION-003']) }}/prices"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          json:
+            productId: "{{ $randomChoice(['PETROL', 'DIESEL', 'KEROSENE']) }}"
+            windowId: "{{ createdWindowId }}"
+          think: 3
+          expect:
+            - statusCode: 201
+          
+      - get:
+          url: "/api/{{ apiVersion }}/pricing/windows/{{ createdWindowId }}"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+
+  # Transaction Processing Load Test
+  - name: "Transaction Processing Load Test"
+    weight: 30
+    beforeRequest: "authenticateUser"
+    flow:
+      - post:
+          url: "/api/{{ apiVersion }}/transactions"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          json:
+            stationId: "{{ $randomChoice(['STATION-001', 'STATION-002', 'STATION-003']) }}"
+            pumpId: "{{ $randomChoice(['PUMP-001', 'PUMP-002', 'PUMP-003']) }}"
+            fuelType: "{{ $randomChoice(['PETROL', 'DIESEL']) }}"
+            quantity: "{{ $randomNumber(10, 100) }}"
+            pricePerLiter: "{{ $randomNumber(8, 12) }}.{{ $randomNumber(10, 99) }}"
+            paymentMethod: "{{ $randomChoice(['CASH', 'MOBILE_MONEY', 'CARD']) }}"
+            autoProcessPayment: false
+          capture:
+            - json: $.id
+              as: transactionId
+            - json: $.totalAmount
+              as: totalAmount
+          think: 2
+          expect:
+            - statusCode: 201
+            - hasProperty: 'receiptNumber'
+
+      - get:
+          url: "/api/{{ apiVersion }}/transactions/{{ transactionId }}"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+
+      - post:
+          url: "/api/{{ apiVersion }}/transactions/{{ transactionId }}/complete"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+
+      - get:
+          url: "/api/{{ apiVersion }}/transactions?limit=20&page=1"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+            - hasProperty: 'data'
+
+  # UPPF Claims Load Test
+  - name: "UPPF Claims Processing Load Test"
+    weight: 15
+    beforeRequest: "authenticateUser"
+    flow:
+      - post:
+          url: "/api/{{ apiVersion }}/uppf/claims"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          json:
+            windowId: "LOAD-PW-{{ $timestamp() }}"
+            deliveryId: "DEL-{{ $randomString() }}"
+            routeId: "{{ $randomChoice(['TEMA-ACCRA', 'ACCRA-KUMASI', 'KUMASI-TAMALE']) }}"
+            kmActual: "{{ $randomNumber(200, 400) }}"
+            litresMoved: "{{ $randomNumber(30000, 45000) }}"
+            gpsTrace: []
+          capture:
+            - json: $.claimId
+              as: claimId
+            - json: $.amountDue
+              as: amountDue
+          think: 3
+          expect:
+            - statusCode: 201
+            - hasProperty: 'claimId'
+
+      - get:
+          url: "/api/{{ apiVersion }}/uppf/claims?limit=10"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+
+      - get:
+          url: "/api/{{ apiVersion }}/uppf/dashboard/variances"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+
+  # Reporting and Analytics Load Test
+  - name: "Reporting and Analytics Load Test"
+    weight: 10
+    beforeRequest: "authenticateUser"
+    flow:
+      - get:
+          url: "/api/{{ apiVersion }}/reports/daily-summary?date={{ $formatDate($now(), 'YYYY-MM-DD') }}"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 2
+          expect:
+            - statusCode: 200
+
+      - get:
+          url: "/api/{{ apiVersion }}/transactions/summary?startDate={{ $formatDate($subtractDays($now(), 7), 'YYYY-MM-DD') }}&endDate={{ $formatDate($now(), 'YYYY-MM-DD') }}"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 2
+          expect:
+            - statusCode: 200
+
+      - get:
+          url: "/api/{{ apiVersion }}/pricing/windows?status=ACTIVE"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          think: 1
+          expect:
+            - statusCode: 200
+
+# Custom functions for authentication
+functions:
+  authenticateUser: |
+    // Custom function to authenticate user before each request
+    function(context, events, done) {
+      const request = {
+        url: context.vars.target + '/api/' + context.vars.apiVersion + '/auth/login',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: 'loadtest-' + Math.random().toString(36).substring(7),
+          password: 'LoadTest123!',
+          tenantId: context.vars.tenantId
+        })
+      };
+      
+      const http = require('http');
+      const req = http.request(request, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => {
+          try {
+            const response = JSON.parse(data);
+            context.vars.accessToken = response.accessToken;
+            context.vars.userId = response.user.id;
+          } catch (e) {
+            console.error('Authentication failed:', e);
+          }
+          done();
+        });
+      });
+      
+      req.on('error', (err) => {
+        console.error('Auth request error:', err);
+        done();
+      });
+      
+      req.write(request.body);
+      req.end();
+    }
+
+# Custom processors for advanced metrics
+processor: "./load-test-processor.js"
+
+# Report configuration
+reports:
+  - type: html
+    output: tests/performance/reports/load-test-report.html
+    title: "OMC ERP Load Test Report"
+    
+  - type: json
+    output: tests/performance/reports/load-test-results.json
+    
+  - type: csv
+    output: tests/performance/reports/load-test-metrics.csv

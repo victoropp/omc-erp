@@ -1,0 +1,536 @@
+# Redis Master-Slave Setup with Sentinel for High Availability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-master-config
+  namespace: omc-erp
+data:
+  redis.conf: |
+    # Network
+    bind 0.0.0.0
+    port 6379
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+    
+    # General
+    daemonize no
+    supervised no
+    pidfile /var/run/redis_6379.pid
+    loglevel notice
+    logfile ""
+    databases 16
+    
+    # Persistence - AOF
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    
+    # Persistence - RDB
+    save 900 1
+    save 300 10
+    save 60 10000
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+    
+    # Replication
+    replica-serve-stale-data yes
+    replica-read-only yes
+    repl-diskless-sync no
+    repl-diskless-sync-delay 5
+    repl-ping-replica-period 10
+    repl-timeout 60
+    repl-disable-tcp-nodelay no
+    repl-backlog-size 1mb
+    repl-backlog-ttl 3600
+    
+    # Security
+    requirepass ${REDIS_PASSWORD}
+    
+    # Memory Management
+    maxmemory 256mb
+    maxmemory-policy allkeys-lru
+    
+    # Slow Log
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+    
+    # Advanced Config
+    hash-max-ziplist-entries 512
+    hash-max-ziplist-value 64
+    list-max-ziplist-size -2
+    set-max-intset-entries 512
+    zset-max-ziplist-entries 128
+    zset-max-ziplist-value 64
+    hll-sparse-max-bytes 3000
+    stream-node-max-bytes 4096
+    stream-node-max-entries 100
+    
+    # Client Output Buffer Limits
+    client-output-buffer-limit normal 0 0 0
+    client-output-buffer-limit replica 256mb 64mb 60
+    client-output-buffer-limit pubsub 32mb 8mb 60
+    
+    # Monitoring
+    latency-monitor-threshold 100
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-slave-config
+  namespace: omc-erp
+data:
+  redis.conf: |
+    # Include master config
+    include /etc/redis-master/redis.conf
+    
+    # Slave specific settings
+    replicaof redis-master-service 6379
+    masterauth ${REDIS_PASSWORD}
+    
+    # Read-only replica
+    replica-read-only yes
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-sentinel-config
+  namespace: omc-erp
+data:
+  sentinel.conf: |
+    # Sentinel Configuration
+    port 26379
+    dir /data
+    
+    # Monitor master
+    sentinel monitor omc-master redis-master-service 6379 2
+    sentinel auth-pass omc-master ${REDIS_PASSWORD}
+    sentinel down-after-milliseconds omc-master 5000
+    sentinel parallel-syncs omc-master 1
+    sentinel failover-timeout omc-master 10000
+    
+    # Notification scripts (optional)
+    # sentinel notification-script omc-master /usr/local/bin/notify.sh
+    # sentinel client-reconfig-script omc-master /usr/local/bin/reconfig.sh
+    
+    # Security
+    requirepass ${REDIS_PASSWORD}
+
+---
+# Redis Master StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-master
+  namespace: omc-erp
+  labels:
+    app: redis-master
+    component: cache
+spec:
+  serviceName: redis-master-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-master
+  template:
+    metadata:
+      labels:
+        app: redis-master
+        component: cache
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
+    spec:
+      securityContext:
+        fsGroup: 1001
+        runAsUser: 1001
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: REDIS_PASSWORD
+        ports:
+        - name: redis
+          containerPort: 6379
+          protocol: TCP
+        livenessProbe:
+          tcpSocket:
+            port: redis
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli -a $REDIS_PASSWORD ping | grep PONG
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 1
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        - name: redis-config
+          mountPath: /etc/redis
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+      
+      # Redis Exporter for Prometheus
+      - name: redis-exporter
+        image: oliver006/redis_exporter:latest
+        env:
+        - name: REDIS_ADDR
+          value: redis://localhost:6379
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: REDIS_PASSWORD
+        ports:
+        - name: metrics
+          containerPort: 9121
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+      
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-master-config
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - redis-master
+              topologyKey: kubernetes.io/hostname
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: fast-ssd
+
+---
+# Redis Slave StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-slave
+  namespace: omc-erp
+  labels:
+    app: redis-slave
+    component: cache-replica
+spec:
+  serviceName: redis-slave-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: redis-slave
+  template:
+    metadata:
+      labels:
+        app: redis-slave
+        component: cache-replica
+    spec:
+      securityContext:
+        fsGroup: 1001
+        runAsUser: 1001
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: REDIS_PASSWORD
+        ports:
+        - name: redis
+          containerPort: 6379
+        livenessProbe:
+          tcpSocket:
+            port: redis
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli -a $REDIS_PASSWORD ping | grep PONG
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: redis-slave-data
+          mountPath: /data
+        - name: redis-config
+          mountPath: /etc/redis
+      
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-slave-config
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - redis-slave
+              topologyKey: kubernetes.io/hostname
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-slave-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: fast-ssd
+
+---
+# Redis Sentinel Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-sentinel
+  namespace: omc-erp
+  labels:
+    app: redis-sentinel
+    component: cache-sentinel
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis-sentinel
+  template:
+    metadata:
+      labels:
+        app: redis-sentinel
+        component: cache-sentinel
+    spec:
+      containers:
+      - name: redis-sentinel
+        image: redis:7-alpine
+        command:
+        - redis-sentinel
+        - /etc/redis/sentinel.conf
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: REDIS_PASSWORD
+        ports:
+        - name: sentinel
+          containerPort: 26379
+        livenessProbe:
+          tcpSocket:
+            port: sentinel
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: sentinel
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "25m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: sentinel-config
+          mountPath: /etc/redis
+      
+      volumes:
+      - name: sentinel-config
+        configMap:
+          name: redis-sentinel-config
+
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-master-service
+  namespace: omc-erp
+  labels:
+    app: redis-master
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+spec:
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+  - name: metrics
+    port: 9121
+    targetPort: 9121
+  selector:
+    app: redis-master
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-slave-service
+  namespace: omc-erp
+  labels:
+    app: redis-slave
+spec:
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+  selector:
+    app: redis-slave
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel-service
+  namespace: omc-erp
+  labels:
+    app: redis-sentinel
+spec:
+  ports:
+  - name: sentinel
+    port: 26379
+    targetPort: 26379
+  selector:
+    app: redis-sentinel
+  type: ClusterIP
+
+---
+# Headless Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-master-headless
+  namespace: omc-erp
+  labels:
+    app: redis-master
+spec:
+  ports:
+  - name: redis
+    port: 6379
+  selector:
+    app: redis-master
+  clusterIP: None
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-slave-headless
+  namespace: omc-erp
+  labels:
+    app: redis-slave
+spec:
+  ports:
+  - name: redis
+    port: 6379
+  selector:
+    app: redis-slave
+  clusterIP: None
+
+---
+# Pod Disruption Budgets
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-master-pdb
+  namespace: omc-erp
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: redis-master
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-slave-pdb
+  namespace: omc-erp
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: redis-slave
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-sentinel-pdb
+  namespace: omc-erp
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: redis-sentinel

@@ -1,0 +1,626 @@
+# Comprehensive Security Scanning and Compliance Configuration
+---
+# Pod Security Standards Configuration
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omc-erp
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# Pod Security Policy (for clusters that still use PSP)
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: omc-erp-restricted
+  labels:
+    app.kubernetes.io/name: omc-erp-security
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1000
+        max: 65535
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1000
+        max: 65535
+  readOnlyRootFilesystem: true
+
+---
+# Security Context Constraints (for OpenShift)
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: omc-erp-scc
+  labels:
+    app.kubernetes.io/name: omc-erp-security
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities:
+- ALL
+fsGroup:
+  type: MustRunAs
+  ranges:
+  - min: 1000
+    max: 65535
+readOnlyRootFilesystem: true
+runAsUser:
+  type: MustRunAsNonRoot
+supplementalGroups:
+  type: MustRunAs
+  ranges:
+  - min: 1000
+    max: 65535
+volumes:
+- configMap
+- downwardAPI
+- emptyDir
+- persistentVolumeClaim
+- projected
+- secret
+
+---
+# Falco Security Runtime Monitoring
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-config
+  namespace: omc-erp-monitoring
+  labels:
+    app.kubernetes.io/name: falco
+data:
+  falco.yaml: |
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+      - /etc/falco/omc_rules.yaml
+    
+    time_format_iso_8601: true
+    json_output: true
+    json_include_output_property: true
+    
+    log_stderr: true
+    log_syslog: true
+    log_level: info
+    
+    priority: debug
+    
+    buffered_outputs: false
+    
+    outputs:
+      rate: 1
+      max_burst: 1000
+    
+    syslog_output:
+      enabled: true
+    
+    file_output:
+      enabled: true
+      keep_alive: false
+      filename: /var/log/falco/events.log
+    
+    stdout_output:
+      enabled: true
+    
+    webserver:
+      enabled: true
+      listen_port: 8765
+      k8s_healthz_endpoint: /healthz
+      ssl_enabled: false
+    
+    grpc:
+      enabled: true
+      bind_address: "0.0.0.0:5060"
+      threadiness: 0
+    
+    grpc_output:
+      enabled: true
+
+  omc_rules.yaml: |
+    # OMC ERP Specific Security Rules
+    
+    # Financial transaction monitoring
+    - rule: Suspicious Financial Transaction Access
+      desc: Detect suspicious access to financial transaction data
+      condition: >
+        spawned_process and
+        (proc.name in (psql, mysql, mongosh) and
+         proc.cmdline contains "fuel_transactions" or
+         proc.cmdline contains "journal_entries" or
+         proc.cmdline contains "payment_transactions") and
+        not user.name in (postgres, omc-erp-user) and
+        not k8s.pod.name startswith "postgres-" and
+        not k8s.pod.name startswith "backup-"
+      output: >
+        Suspicious database access to financial data
+        (user=%user.name command=%proc.cmdline pod=%k8s.pod.name
+         container=%container.name image=%container.image)
+      priority: CRITICAL
+      tags: [omc-erp, database, financial]
+    
+    # Unauthorized file access in containers
+    - rule: Unauthorized File System Access
+      desc: Detect unauthorized file system access in OMC containers
+      condition: >
+        open_read and
+        k8s.ns.name = "omc-erp" and
+        (fd.name startswith "/etc/ssl" or
+         fd.name startswith "/var/lib/postgresql" or
+         fd.name startswith "/app/secrets") and
+        not proc.name in (node, postgres, java, python)
+      output: >
+        Unauthorized file access in OMC container
+        (file=%fd.name proc=%proc.name pod=%k8s.pod.name
+         container=%container.name image=%container.image)
+      priority: HIGH
+      tags: [omc-erp, filesystem, unauthorized]
+    
+    # Network connection monitoring
+    - rule: Unexpected Network Connection
+      desc: Detect unexpected network connections from OMC services
+      condition: >
+        outbound and
+        k8s.ns.name = "omc-erp" and
+        not (
+          (fd.rip in (postgres_primary_ips, redis_ips, kafka_ips)) or
+          (fd.rport in (5432, 6379, 9092, 443, 53)) or
+          k8s.pod.name contains "backup"
+        )
+      output: >
+        Unexpected network connection from OMC service
+        (dest=%fd.rip:%fd.rport proc=%proc.name pod=%k8s.pod.name
+         container=%container.name)
+      priority: MEDIUM
+      tags: [omc-erp, network, suspicious]
+    
+    # Privilege escalation detection
+    - rule: Privilege Escalation in OMC Containers
+      desc: Detect privilege escalation attempts
+      condition: >
+        spawned_process and
+        k8s.ns.name = "omc-erp" and
+        (proc.name in (su, sudo, setuid) or
+         proc.args contains "chmod +s" or
+         proc.args contains "chown root")
+      output: >
+        Privilege escalation attempt in OMC container
+        (command=%proc.cmdline user=%user.name pod=%k8s.pod.name
+         container=%container.name)
+      priority: CRITICAL
+      tags: [omc-erp, privilege-escalation]
+    
+    # Container escape detection
+    - rule: Container Escape Attempt
+      desc: Detect potential container escape attempts
+      condition: >
+        spawned_process and
+        k8s.ns.name = "omc-erp" and
+        (proc.name = "runc" or
+         proc.name = "docker" or
+         proc.name = "crictl" or
+         proc.args contains "/proc/1/root" or
+         proc.args contains "nsenter")
+      output: >
+        Potential container escape attempt
+        (command=%proc.cmdline user=%user.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [omc-erp, container-escape]
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: omc-erp-monitoring
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: security-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falco
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: falco
+        app.kubernetes.io/component: security-monitoring
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8765"
+    spec:
+      serviceAccount: falco
+      hostNetwork: false
+      hostPID: true
+      containers:
+      - name: falco
+        image: falcosecurity/falco:0.36.0
+        args:
+        - /usr/bin/falco
+        - --cri
+        - /run/containerd/containerd.sock
+        - -K
+        - /var/run/secrets/kubernetes.io/serviceaccount/token
+        - -k
+        - https://$(KUBERNETES_SERVICE_HOST)
+        - --k8s-node-name=$(FALCO_K8S_NODE_NAME)
+        env:
+        - name: FALCO_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          privileged: true
+        resources:
+          limits:
+            memory: 1Gi
+            cpu: 1000m
+          requests:
+            memory: 512Mi
+            cpu: 100m
+        volumeMounts:
+        - mountPath: /host/var/run/docker.sock
+          name: docker-socket
+          readOnly: true
+        - mountPath: /run/containerd
+          name: containerd-socket
+          readOnly: true
+        - mountPath: /host/dev
+          name: dev-fs
+          readOnly: true
+        - mountPath: /host/proc
+          name: proc-fs
+          readOnly: true
+        - mountPath: /host/boot
+          name: boot-fs
+          readOnly: true
+        - mountPath: /host/lib/modules
+          name: lib-modules
+        - mountPath: /host/usr
+          name: usr-fs
+          readOnly: true
+        - mountPath: /host/etc
+          name: etc-fs
+          readOnly: true
+        - mountPath: /etc/falco
+          name: config
+      volumes:
+      - name: docker-socket
+        hostPath:
+          path: /var/run/docker.sock
+      - name: containerd-socket
+        hostPath:
+          path: /run/containerd
+      - name: dev-fs
+        hostPath:
+          path: /dev
+      - name: proc-fs
+        hostPath:
+          path: /proc
+      - name: boot-fs
+        hostPath:
+          path: /boot
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+      - name: usr-fs
+        hostPath:
+          path: /usr
+      - name: etc-fs
+        hostPath:
+          path: /etc
+      - name: config
+        configMap:
+          name: falco-config
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/master
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: falco
+  namespace: omc-erp-monitoring
+  labels:
+    app.kubernetes.io/name: falco
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: falco
+  labels:
+    app.kubernetes.io/name: falco
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods", "replicationcontrollers", "services", "namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["extensions"]
+  resources: ["daemonsets", "deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: falco
+  labels:
+    app.kubernetes.io/name: falco
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: falco
+subjects:
+- kind: ServiceAccount
+  name: falco
+  namespace: omc-erp-monitoring
+
+---
+# Trivy Vulnerability Scanner
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trivy-scan
+  namespace: omc-erp-monitoring
+  labels:
+    app.kubernetes.io/name: trivy-scanner
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: trivy
+            image: aquasec/trivy:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Scan all OMC ERP images
+              IMAGES=(
+                "omc-erp/api-gateway:latest"
+                "omc-erp/auth-service:latest"
+                "omc-erp/transaction-service:latest"
+                "omc-erp/payment-service:latest"
+                "omc-erp/dashboard:latest"
+              )
+              
+              mkdir -p /reports
+              
+              for image in "${IMAGES[@]}"; do
+                echo "Scanning $image"
+                trivy image --format json --output "/reports/${image//\//_}_$(date +%Y%m%d).json" "$image"
+                trivy image --format table --severity HIGH,CRITICAL "$image"
+              done
+              
+              # Upload reports to storage
+              if [ ! -z "$AWS_ACCESS_KEY_ID" ]; then
+                aws s3 cp /reports/ s3://omc-erp-security-reports/trivy/ --recursive
+              fi
+            env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backup-secrets
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backup-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+            volumeMounts:
+            - name: reports
+              mountPath: /reports
+            resources:
+              requests:
+                memory: 512Mi
+                cpu: 200m
+              limits:
+                memory: 2Gi
+                cpu: 1000m
+          volumes:
+          - name: reports
+            emptyDir: {}
+
+---
+# OPA Gatekeeper Policies
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: omcerprequiredsecuritycontext
+  labels:
+    app.kubernetes.io/name: gatekeeper-policy
+spec:
+  crd:
+    spec:
+      names:
+        kind: OMCERPRequiredSecurityContext
+      validation:
+        type: object
+        properties:
+          runAsNonRoot:
+            type: boolean
+          readOnlyRootFilesystem:
+            type: boolean
+          allowPrivilegeEscalation:
+            type: boolean
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package omcerprequiredsecuritycontext
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          input.review.object.metadata.namespace == "omc-erp"
+          
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.runAsNonRoot == true
+          msg := "Containers must run as non-root user"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          input.review.object.metadata.namespace == "omc-erp"
+          
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.readOnlyRootFilesystem == true
+          msg := "Containers must have read-only root filesystem"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          input.review.object.metadata.namespace == "omc-erp"
+          
+          container := input.review.object.spec.containers[_]
+          container.securityContext.allowPrivilegeEscalation != false
+          msg := "Containers must not allow privilege escalation"
+        }
+
+---
+apiVersion: config.gatekeeper.sh/v1alpha1
+kind: OMCERPRequiredSecurityContext
+metadata:
+  name: omc-erp-security-context
+spec:
+  match:
+    - apiGroups: [""]
+      kinds: ["Pod"]
+      namespaces: ["omc-erp"]
+  parameters:
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+
+---
+# Security Compliance Scanner
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: compliance-scanner
+  namespace: omc-erp-monitoring
+  labels:
+    app.kubernetes.io/name: compliance-scanner
+spec:
+  schedule: "0 1 * * 1"  # Weekly on Monday at 1 AM
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: compliance-scanner
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Install required tools
+              apk add --no-cache curl jq
+              
+              # Ghana Data Protection Act compliance check
+              echo "Running Ghana Data Protection Act compliance scan..."
+              
+              # Check for data encryption at rest
+              kubectl get pvc -A -o json | jq -r '.items[] | select(.spec.storageClassName != "encrypted") | .metadata.name' > /tmp/unencrypted_storage.txt
+              
+              # Check for TLS enforcement
+              kubectl get ingress -A -o json | jq -r '.items[] | select(.spec.tls == null) | .metadata.name' > /tmp/unencrypted_ingress.txt
+              
+              # Generate compliance report
+              cat > /tmp/compliance_report.json << EOF
+              {
+                "scan_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "compliance_framework": "Ghana Data Protection Act 2012",
+                "findings": {
+                  "unencrypted_storage": $(cat /tmp/unencrypted_storage.txt | wc -l),
+                  "unencrypted_ingress": $(cat /tmp/unencrypted_ingress.txt | wc -l)
+                },
+                "status": "$([ $(cat /tmp/unencrypted_storage.txt | wc -l) -eq 0 ] && [ $(cat /tmp/unencrypted_ingress.txt | wc -l) -eq 0 ] && echo 'COMPLIANT' || echo 'NON_COMPLIANT')"
+              }
+              EOF
+              
+              # Send report to compliance system
+              if [ ! -z "$COMPLIANCE_WEBHOOK_URL" ]; then
+                curl -X POST "$COMPLIANCE_WEBHOOK_URL" \
+                  -H "Content-Type: application/json" \
+                  -d @/tmp/compliance_report.json
+              fi
+            env:
+            - name: COMPLIANCE_WEBHOOK_URL
+              value: "https://compliance.erp.omc.gov.gh/api/reports"
+            resources:
+              requests:
+                memory: 128Mi
+                cpu: 100m
+              limits:
+                memory: 256Mi
+                cpu: 200m
+
+---
+# Certificate Management
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: omc-erp-ca-issuer
+  labels:
+    app.kubernetes.io/name: cert-manager
+spec:
+  ca:
+    secretName: omc-erp-ca-secret
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: omc-erp-tls
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: tls-certificate
+spec:
+  secretName: omc-erp-tls-secret
+  issuerRef:
+    name: omc-erp-ca-issuer
+    kind: ClusterIssuer
+  dnsNames:
+  - erp.omc.gov.gh
+  - api.erp.omc.gov.gh
+  - staging.erp.omc.gov.gh
+  - '*.erp.omc.gov.gh'

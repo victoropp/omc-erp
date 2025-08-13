@@ -1,0 +1,602 @@
+# Logstash for Log Processing and Enrichment
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: logstash
+data:
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    path.config: /usr/share/logstash/pipeline
+    pipeline.workers: 2
+    pipeline.batch.size: 1000
+    pipeline.batch.delay: 50
+    
+    # Monitoring
+    xpack.monitoring.enabled: true
+    xpack.monitoring.elasticsearch.hosts: ["https://elasticsearch:9200"]
+    xpack.monitoring.elasticsearch.username: "logstash_system"
+    xpack.monitoring.elasticsearch.password: "${LOGSTASH_PASSWORD}"
+    
+    # JVM Settings
+    config.reload.automatic: true
+    config.reload.interval: 3s
+    
+    # Dead Letter Queue
+    dead_letter_queue.enable: true
+    dead_letter_queue.max_bytes: 1gb
+    
+  pipelines.yml: |
+    - pipeline.id: omc-erp-logs
+      path.config: "/usr/share/logstash/pipeline/omc-erp.conf"
+      pipeline.workers: 2
+      pipeline.batch.size: 1000
+      
+    - pipeline.id: omc-business-metrics
+      path.config: "/usr/share/logstash/pipeline/business-metrics.conf"
+      pipeline.workers: 1
+      pipeline.batch.size: 500
+
+  jvm.options: |
+    ## JVM configuration
+    
+    # Xms represents the initial size of total heap space
+    # Xmx represents the maximum size of total heap space
+    -Xms1g
+    -Xmx1g
+    
+    ################################################################
+    ## Expert settings
+    ################################################################
+    
+    # G1GC Configuration
+    -XX:+UseG1GC
+    -XX:MaxGCPauseMillis=250
+    -XX:G1HeapRegionSize=32m
+    -XX:+UnlockExperimentalVMOptions
+    -XX:+UseCGroupMemoryLimitForHeap
+    
+    # Disable calls to System.gc
+    -XX:+DisableExplicitGC
+    
+    # Pre-touch memory pages used by the JVM during initialization
+    -XX:+AlwaysPreTouch
+    
+    ## Locale
+    -Dfile.encoding=UTF-8
+    -Djava.awt.headless=true
+    
+    # Use our provided JNA always versus the system one
+    -Djna.nosys=true
+    
+    # Turn off a JDK optimization that throws away stack traces for common
+    # exceptions because stack traces are important for debugging
+    -XX:-OmitStackTraceInFastThrow
+    
+    # Flags to configure Netty
+    -Dio.netty.noUnsafe=true
+    -Dio.netty.noKeySetOptimization=true
+    -Dio.netty.recycler.maxCapacityPerThread=0
+    
+    # Log4j 2 configuration
+    -Dlog4j2.disable.jmx=true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-pipeline
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: logstash
+data:
+  omc-erp.conf: |
+    input {
+      beats {
+        port => 5044
+        type => "logs"
+      }
+      
+      # Direct input from applications
+      http {
+        port => 8080
+        type => "app-logs"
+        codec => json
+      }
+      
+      # Kafka input for real-time logs
+      kafka {
+        bootstrap_servers => "kafka-0.kafka-headless.omc-erp.svc.cluster.local:9092,kafka-1.kafka-headless.omc-erp.svc.cluster.local:9092,kafka-2.kafka-headless.omc-erp.svc.cluster.local:9092"
+        topics => ["application-logs", "audit-logs", "error-logs"]
+        group_id => "logstash-omc-erp"
+        codec => json
+        type => "kafka-logs"
+      }
+    }
+    
+    filter {
+      # Parse Kubernetes metadata
+      if [kubernetes] {
+        mutate {
+          add_field => {
+            "pod" => "%{[kubernetes][pod][name]}"
+            "namespace" => "%{[kubernetes][namespace]}"
+            "container" => "%{[kubernetes][container][name]}"
+            "node" => "%{[kubernetes][node][name]}"
+          }
+        }
+      }
+      
+      # Parse JSON logs
+      if [message] =~ /^{.*}$/ {
+        json {
+          source => "message"
+          target => "parsed"
+        }
+        
+        if [parsed] {
+          mutate {
+            add_field => {
+              "level" => "%{[parsed][level]}"
+              "service" => "%{[parsed][service]}"
+              "trace_id" => "%{[parsed][trace_id]}"
+              "span_id" => "%{[parsed][span_id]}"
+              "user_id" => "%{[parsed][user_id]}"
+            }
+          }
+          
+          if [parsed][timestamp] {
+            date {
+              match => [ "[parsed][timestamp]", "ISO8601" ]
+              target => "@timestamp"
+            }
+          }
+        }
+      }
+      
+      # Grok pattern for standard log formats
+      grok {
+        match => {
+          "message" => "\[%{TIMESTAMP_ISO8601:log_timestamp}\] %{LOGLEVEL:level} %{DATA:service} - %{GREEDYDATA:log_message}"
+        }
+        tag_on_failure => ["grok_parse_failure"]
+      }
+      
+      # Parse application-specific patterns
+      if [service] == "api-gateway" {
+        grok {
+          match => {
+            "message" => "%{IP:client_ip} - \[%{HTTPDATE:request_time}\] \"%{WORD:method} %{URIPATHPARAM:path} HTTP/%{NUMBER:http_version}\" %{INT:status_code} %{INT:response_size} %{QS:referer} %{QS:user_agent} %{NUMBER:response_time:float}"
+          }
+          tag_on_failure => ["access_log_parse_failure"]
+        }
+      }
+      
+      # Enhanced error log parsing
+      if [level] in ["ERROR", "FATAL", "CRITICAL"] {
+        mutate {
+          add_field => { "alert_severity" => "high" }
+          add_tag => [ "error_log" ]
+        }
+        
+        # Extract stack traces
+        if [message] =~ /Exception|Error|Traceback/ {
+          mutate {
+            add_tag => [ "exception" ]
+          }
+        }
+      }
+      
+      # Business events processing
+      if [service] in ["transaction-service", "payment-service", "pricing-service"] {
+        mutate {
+          add_tag => [ "business_event" ]
+        }
+        
+        # Extract transaction details
+        if [message] =~ /transaction_id/ {
+          grok {
+            match => {
+              "message" => "transaction_id=%{DATA:transaction_id} amount=%{NUMBER:amount:float} currency=%{WORD:currency} station_id=%{DATA:station_id}"
+            }
+          }
+        }
+      }
+      
+      # Security events
+      if [message] =~ /authentication|authorization|security|suspicious/ {
+        mutate {
+          add_tag => [ "security_event" ]
+          add_field => { "alert_severity" => "medium" }
+        }
+      }
+      
+      # Performance monitoring
+      if [message] =~ /slow_query|timeout|performance/ {
+        mutate {
+          add_tag => [ "performance_issue" ]
+        }
+      }
+      
+      # Clean up and standardize fields
+      mutate {
+        remove_field => [ "parsed", "host", "agent" ]
+        lowercase => [ "level" ]
+      }
+      
+      # Add geographical context for Ghana
+      if [client_ip] {
+        geoip {
+          source => "client_ip"
+          target => "geoip"
+          default_database_type => "City"
+        }
+      }
+      
+      # Enrich with OMC-specific context
+      translate {
+        field => "station_id"
+        destination => "station_name"
+        dictionary_path => "/etc/logstash/dictionaries/stations.yml"
+        fallback => "Unknown Station"
+      }
+      
+      # Data quality checks
+      if ![@timestamp] {
+        mutate {
+          add_field => { "@timestamp" => "%{+YYYY-MM-dd'T'HH:mm:ss.SSSZ}" }
+        }
+      }
+      
+      if ![service] {
+        mutate {
+          add_field => { "service" => "unknown" }
+        }
+      }
+    }
+    
+    output {
+      # Main Elasticsearch output
+      elasticsearch {
+        hosts => ["https://elasticsearch:9200"]
+        user => "logstash_system"
+        password => "${LOGSTASH_PASSWORD}"
+        index => "omc-erp-logs-%{+YYYY.MM.dd}"
+        template_name => "omc-erp-logs"
+        template_pattern => "omc-erp-logs-*"
+        template_overwrite => true
+        ssl => true
+        ssl_certificate_verification => false
+        
+        # Custom template
+        template => '{
+          "index_patterns": ["omc-erp-logs-*"],
+          "settings": {
+            "number_of_shards": 2,
+            "number_of_replicas": 1,
+            "index.lifecycle.name": "omc-erp-policy"
+          },
+          "mappings": {
+            "properties": {
+              "@timestamp": { "type": "date" },
+              "level": { "type": "keyword" },
+              "service": { "type": "keyword" },
+              "message": { "type": "text", "analyzer": "standard" },
+              "trace_id": { "type": "keyword" },
+              "user_id": { "type": "keyword" },
+              "transaction_id": { "type": "keyword" },
+              "amount": { "type": "float" },
+              "station_id": { "type": "keyword" },
+              "client_ip": { "type": "ip" }
+            }
+          }
+        }'
+      }
+      
+      # Error logs to separate index
+      if "error_log" in [tags] {
+        elasticsearch {
+          hosts => ["https://elasticsearch:9200"]
+          user => "logstash_system"
+          password => "${LOGSTASH_PASSWORD}"
+          index => "omc-erp-errors-%{+YYYY.MM.dd}"
+          ssl => true
+          ssl_certificate_verification => false
+        }
+      }
+      
+      # Business events to metrics
+      if "business_event" in [tags] {
+        elasticsearch {
+          hosts => ["https://elasticsearch:9200"]
+          user => "logstash_system"
+          password => "${LOGSTASH_PASSWORD}"
+          index => "omc-erp-business-%{+YYYY.MM.dd}"
+          ssl => true
+          ssl_certificate_verification => false
+        }
+      }
+      
+      # Security events
+      if "security_event" in [tags] {
+        elasticsearch {
+          hosts => ["https://elasticsearch:9200"]
+          user => "logstash_system"
+          password => "${LOGSTASH_PASSWORD}"
+          index => "omc-erp-security-%{+YYYY.MM.dd}"
+          ssl => true
+          ssl_certificate_verification => false
+        }
+        
+        # Send to security monitoring system
+        http {
+          url => "https://security-monitor.omc.gov.gh/api/events"
+          http_method => "post"
+          format => "json"
+          headers => {
+            "Authorization" => "Bearer ${SECURITY_API_TOKEN}"
+            "Content-Type" => "application/json"
+          }
+        }
+      }
+      
+      # Development/Debug output
+      if [level] == "debug" and [@metadata][target_index] != "production" {
+        stdout {
+          codec => rubydebug
+        }
+      }
+    }
+
+  business-metrics.conf: |
+    input {
+      kafka {
+        bootstrap_servers => "kafka-0.kafka-headless.omc-erp.svc.cluster.local:9092,kafka-1.kafka-headless.omc-erp.svc.cluster.local:9092,kafka-2.kafka-headless.omc-erp.svc.cluster.local:9092"
+        topics => ["business-metrics", "fuel-sales", "payment-events"]
+        group_id => "logstash-business-metrics"
+        codec => json
+        type => "business-metrics"
+      }
+    }
+    
+    filter {
+      # Process fuel sales metrics
+      if [event_type] == "fuel_sale" {
+        mutate {
+          add_field => {
+            "metric_name" => "fuel_sales"
+            "station_id" => "%{[data][station_id]}"
+            "product_type" => "%{[data][product_type]}"
+            "quantity_liters" => "%{[data][quantity_liters]}"
+            "amount_ghs" => "%{[data][amount_ghs]}"
+          }
+        }
+      }
+      
+      # Process payment events
+      if [event_type] == "payment" {
+        mutate {
+          add_field => {
+            "metric_name" => "payment_transaction"
+            "payment_method" => "%{[data][payment_method]}"
+            "status" => "%{[data][status]}"
+            "amount" => "%{[data][amount]}"
+          }
+        }
+      }
+      
+      # Aggregate hourly metrics
+      aggregate {
+        task_id => "fuel_sales_hourly_%{station_id}_%{+YYYY-MM-dd-HH}"
+        code => "
+          map['station_id'] = event.get('station_id')
+          map['hour'] = event.get('@timestamp').strftime('%Y-%m-%d %H:00:00')
+          map['total_volume'] ||= 0
+          map['total_revenue'] ||= 0
+          map['transaction_count'] ||= 0
+          
+          if event.get('quantity_liters')
+            map['total_volume'] += event.get('quantity_liters').to_f
+          end
+          
+          if event.get('amount_ghs')
+            map['total_revenue'] += event.get('amount_ghs').to_f
+          end
+          
+          map['transaction_count'] += 1
+        "
+        push_map_as_event_on_timeout => true
+        timeout => 3600
+      }
+    }
+    
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch:9200"]
+        user => "logstash_system"
+        password => "${LOGSTASH_PASSWORD}"
+        index => "omc-business-metrics-%{+YYYY.MM.dd}"
+        ssl => true
+        ssl_certificate_verification => false
+      }
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-dictionaries
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: logstash
+data:
+  stations.yml: |
+    # Station ID to Name mapping for Ghana OMC stations
+    STA001: "Accra Central Station"
+    STA002: "Kumasi Main Station"
+    STA003: "Takoradi Port Station"
+    STA004: "Cape Coast Station"
+    STA005: "Tamale Station"
+    STA006: "Ho Regional Station"
+    STA007: "Koforidua Station"
+    STA008: "Sunyani Station"
+    STA009: "Wa Upper West Station"
+    STA010: "Bolgatanga Station"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: logstash
+    app.kubernetes.io/component: logging
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: logstash
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: logstash
+        app.kubernetes.io/component: logging
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: logstash
+        image: docker.elastic.co/logstash/logstash:8.10.0
+        ports:
+        - name: beats
+          containerPort: 5044
+          protocol: TCP
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: monitoring
+          containerPort: 9600
+          protocol: TCP
+        env:
+        - name: LOGSTASH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-secrets
+              key: LOGSTASH_PASSWORD
+        - name: SECURITY_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: SECURITY_API_TOKEN
+        - name: LS_JAVA_OPTS
+          value: "-Xmx1g -Xms1g"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/logstash/config/logstash.yml
+          subPath: logstash.yml
+        - name: config
+          mountPath: /usr/share/logstash/config/pipelines.yml
+          subPath: pipelines.yml
+        - name: config
+          mountPath: /usr/share/logstash/config/jvm.options
+          subPath: jvm.options
+        - name: pipeline
+          mountPath: /usr/share/logstash/pipeline
+        - name: dictionaries
+          mountPath: /etc/logstash/dictionaries
+        - name: logstash-data
+          mountPath: /usr/share/logstash/data
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 9600
+          initialDelaySeconds: 120
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 9600
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: config
+        configMap:
+          name: logstash-config
+      - name: pipeline
+        configMap:
+          name: logstash-pipeline
+      - name: dictionaries
+        configMap:
+          name: logstash-dictionaries
+      - name: logstash-data
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - logstash
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: logstash
+    app.kubernetes.io/component: logging
+spec:
+  type: ClusterIP
+  ports:
+  - name: beats
+    port: 5044
+    targetPort: 5044
+    protocol: TCP
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  - name: monitoring
+    port: 9600
+    targetPort: 9600
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: logstash
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: logstash-pdb
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: logstash
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: logstash

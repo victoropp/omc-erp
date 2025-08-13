@@ -3,49 +3,154 @@ kind: ConfigMap
 metadata:
   name: omc-erp-config
   namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: omc-erp
+    app.kubernetes.io/component: configuration
 data:
   # Database Configuration
-  DB_HOST: "postgres-service"
+  DB_HOST: "postgres-primary-service"
   DB_PORT: "5432"
-  DB_NAME: "omc_erp"
-  REDIS_HOST: "redis-service"
+  DB_NAME: "omc_erp_prod"
+  DB_READ_REPLICA_HOST: "postgres-replica-service"
+  DB_SSL_MODE: "require"
+  DB_POOL_SIZE: "20"
+  DB_CONNECTION_TIMEOUT: "60000"
+  DB_IDLE_TIMEOUT: "10000"
+  
+  # TimescaleDB Configuration
+  TIMESCALE_HOST: "timescaledb-service"
+  TIMESCALE_PORT: "5432"
+  TIMESCALE_DB: "omc_erp_timeseries"
+  TIMESCALE_SSL_MODE: "require"
+  
+  # Redis Configuration
+  REDIS_HOST: "redis-master-service"
   REDIS_PORT: "6379"
+  REDIS_SLAVE_HOST: "redis-slave-service"
+  REDIS_CLUSTER_MODE: "false"
+  REDIS_SENTINEL_MODE: "false"
+  REDIS_TLS_ENABLED: "false"
+  REDIS_DB: "0"
+  REDIS_CONNECTION_TIMEOUT: "5000"
+  REDIS_COMMAND_TIMEOUT: "3000"
   
   # Kafka Configuration
-  KAFKA_BROKER: "kafka-service:9092"
+  KAFKA_BROKERS: "kafka-0.kafka-headless.omc-erp.svc.cluster.local:9092,kafka-1.kafka-headless.omc-erp.svc.cluster.local:9092,kafka-2.kafka-headless.omc-erp.svc.cluster.local:9092"
+  KAFKA_CLIENT_ID: "omc-erp-client"
+  KAFKA_CONSUMER_GROUP: "omc-erp-consumers"
+  KAFKA_RETRY_ATTEMPTS: "3"
+  KAFKA_REQUEST_TIMEOUT: "30000"
+  KAFKA_CONNECTION_TIMEOUT: "10000"
+  
+  # MongoDB Configuration
+  MONGO_HOST: "mongodb-service"
+  MONGO_PORT: "27017"
+  MONGO_DB: "omc_erp_docs"
+  MONGO_REPLICA_SET: "rs0"
+  MONGO_SSL: "true"
+  MONGO_AUTH_SOURCE: "admin"
+  
+  # MinIO Configuration
+  MINIO_ENDPOINT: "minio-service"
+  MINIO_PORT: "9000"
+  MINIO_SSL: "false"
+  MINIO_BUCKET: "omc-erp-storage"
   
   # Service Discovery
   AUTH_SERVICE_URL: "http://auth-service:3001"
-  PRICING_SERVICE_URL: "http://pricing-service:3002"
-  UPPF_SERVICE_URL: "http://uppf-service:3003"
-  TRANSACTION_SERVICE_URL: "http://transaction-service:3004"
-  PAYMENT_SERVICE_URL: "http://payment-service:3005"
-  AI_FORECASTING_SERVICE_URL: "http://ai-forecasting-service:3006"
-  IOT_SERVICE_URL: "http://iot-service:3007"
-  REGULATORY_SERVICE_URL: "http://regulatory-service:3008"
-  FRAUD_DETECTION_SERVICE_URL: "http://fraud-detection-service:3009"
-  FOREX_SERVICE_URL: "http://forex-service:3010"
+  PRICING_SERVICE_URL: "http://pricing-service:3004"
+  UPPF_SERVICE_URL: "http://uppf-service:3005"
+  TRANSACTION_SERVICE_URL: "http://transaction-service:3002"
+  PAYMENT_SERVICE_URL: "http://payment-service:3012"
+  AI_FORECASTING_SERVICE_URL: "http://ai-forecasting-service:3013"
+  IOT_SERVICE_URL: "http://iot-service:3014"
+  REGULATORY_SERVICE_URL: "http://regulatory-service:3006"
+  FRAUD_DETECTION_SERVICE_URL: "http://fraud-detection-service:3015"
+  FOREX_SERVICE_URL: "http://forex-service:3016"
+  STATION_SERVICE_URL: "http://station-service:3003"
+  CONFIGURATION_SERVICE_URL: "http://configuration-service:3007"
+  ACCOUNTING_SERVICE_URL: "http://accounting-service:3008"
+  INVENTORY_SERVICE_URL: "http://inventory-service:3009"
+  CUSTOMER_SERVICE_URL: "http://customer-service:3010"
+  FLEET_SERVICE_URL: "http://fleet-service:3011"
   
   # External APIs
   MTN_MOMO_BASE_URL: "https://proxy.momoapi.mtn.com"
   MTN_MOMO_ENVIRONMENT: "production"
+  VODAFONE_CASH_BASE_URL: "https://api.vodafone.com.gh"
+  AIRTEL_MONEY_BASE_URL: "https://api.airtel.com.gh"
   BANK_OF_GHANA_API_URL: "https://api.bog.gov.gh"
   NPA_API_URL: "https://api.npa.gov.gh"
   GRA_API_URL: "https://api.gra.gov.gh"
   
-  # Application Settings
+  # Application Configuration
   NODE_ENV: "production"
   LOG_LEVEL: "info"
-  JWT_EXPIRES_IN: "24h"
-  API_RATE_LIMIT: "1000"
+  LOG_FORMAT: "json"
+  ENABLE_CORS: "true"
+  CORS_ORIGINS: "https://erp.omc.gov.gh,https://dashboard.omc.gov.gh"
   
-  # Ghana-specific Settings
+  # Security Configuration
+  RATE_LIMIT_WINDOW_MS: "900000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+  SESSION_TIMEOUT: "3600000"
+  MAX_LOGIN_ATTEMPTS: "5"
+  ACCOUNT_LOCKOUT_TIME: "1800000"
+  
+  # Business Configuration
   DEFAULT_CURRENCY: "GHS"
-  TIMEZONE: "Africa/Accra"
-  DEFAULT_LANGUAGE: "en"
+  DEFAULT_TIMEZONE: "Africa/Accra"
+  FISCAL_YEAR_START: "01-01"
+  
+  # API Configuration
+  API_VERSION: "v1"
+  API_TIMEOUT: "30000"
+  MAX_REQUEST_SIZE: "10mb"
+  PAGINATION_DEFAULT_LIMIT: "20"
+  PAGINATION_MAX_LIMIT: "100"
+  
+  # Monitoring Configuration
+  ENABLE_METRICS: "true"
+  METRICS_PORT: "9090"
+  HEALTH_CHECK_INTERVAL: "30000"
+  ENABLE_TRACING: "true"
+  JAEGER_ENDPOINT: "jaeger-collector.omc-erp-monitoring.svc.cluster.local:14268"
+  
+  # Cache Configuration
+  CACHE_TTL_DEFAULT: "300"
+  CACHE_TTL_USER_SESSION: "3600"
+  CACHE_TTL_CONFIGURATION: "1800"
+  CACHE_TTL_PRICING: "600"
+  
+  # Background Jobs Configuration
+  JOB_CONCURRENCY: "5"
+  JOB_MAX_ATTEMPTS: "3"
+  JOB_BACKOFF_DELAY: "60000"
+  
+  # File Upload Configuration
+  MAX_FILE_SIZE: "50mb"
+  ALLOWED_FILE_TYPES: "pdf,doc,docx,xls,xlsx,jpg,jpeg,png,gif"
+  UPLOAD_PATH: "/uploads"
+  
+  # Email Configuration (SMTP)
+  SMTP_HOST: "smtp.gmail.com"
+  SMTP_PORT: "587"
+  SMTP_SECURE: "false"
+  SMTP_FROM_NAME: "OMC ERP System"
+  
+  # SMS Configuration
+  SMS_PROVIDER: "mtn"
+  SMS_FROM_NUMBER: "+233123456789"
+  
+  # Ghana-specific Configuration
+  GHANA_REGIONS: "Greater Accra,Ashanti,Western,Eastern,Central,Northern,Upper East,Upper West,Volta,Brong Ahafo"
+  VAT_RATE: "15"
+  NHIL_RATE: "2.5"
+  GETFUND_RATE: "2.5"
+  COVID_LEVY_RATE: "1"
   
   # Istio Settings
-  ISTIO_PROXY_IMAGE: "docker.io/istio/proxyv2:1.19.0"
+  ISTIO_PROXY_IMAGE: "docker.io/istio/proxyv2:1.20.1"
 ---
 apiVersion: v1
 kind: ConfigMap

@@ -1,0 +1,538 @@
+# PostgreSQL Backup and Disaster Recovery Solution
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-backup-scripts
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: postgres-backup
+data:
+  backup.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Configuration
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_DIR="/backups/postgres"
+    S3_BUCKET="${S3_BACKUP_BUCKET:-omc-erp-backups}"
+    DB_HOST="${DB_HOST:-postgres-primary-service}"
+    DB_PORT="${DB_PORT:-5432}"
+    DB_NAME="${DB_NAME:-omc_erp_prod}"
+    RETENTION_DAYS="${RETENTION_DAYS:-30}"
+    
+    # Create backup directory
+    mkdir -p $BACKUP_DIR
+    
+    # Function to log with timestamp
+    log() {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    }
+    
+    log "Starting PostgreSQL backup process"
+    
+    # Full database backup
+    log "Creating full database backup"
+    pg_dump -h $DB_HOST -p $DB_PORT -U $DB_USERNAME -d $DB_NAME \
+        --verbose --format=custom --compress=9 \
+        --file="$BACKUP_DIR/full_backup_${TIMESTAMP}.dump"
+    
+    if [ $? -eq 0 ]; then
+        log "Full backup created successfully"
+        FULL_BACKUP_FILE="$BACKUP_DIR/full_backup_${TIMESTAMP}.dump"
+        FULL_BACKUP_SIZE=$(du -h "$FULL_BACKUP_FILE" | cut -f1)
+        log "Backup size: $FULL_BACKUP_SIZE"
+    else
+        log "ERROR: Full backup failed"
+        exit 1
+    fi
+    
+    # Schema-only backup
+    log "Creating schema-only backup"
+    pg_dump -h $DB_HOST -p $DB_PORT -U $DB_USERNAME -d $DB_NAME \
+        --schema-only --verbose --format=plain \
+        --file="$BACKUP_DIR/schema_backup_${TIMESTAMP}.sql"
+    
+    # Table-wise backups for critical tables
+    log "Creating table-wise backups for critical tables"
+    CRITICAL_TABLES=("fuel_transactions" "customers" "stations" "journal_entries" "chart_of_accounts")
+    
+    for table in "${CRITICAL_TABLES[@]}"; do
+        log "Backing up table: $table"
+        pg_dump -h $DB_HOST -p $DB_PORT -U $DB_USERNAME -d $DB_NAME \
+            --table=$table --format=custom --compress=9 \
+            --file="$BACKUP_DIR/table_${table}_${TIMESTAMP}.dump"
+    done
+    
+    # Create backup manifest
+    log "Creating backup manifest"
+    cat > "$BACKUP_DIR/manifest_${TIMESTAMP}.json" << EOF
+    {
+        "backup_timestamp": "${TIMESTAMP}",
+        "backup_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "database": {
+            "host": "$DB_HOST",
+            "name": "$DB_NAME",
+            "version": "$(pg_dump --version | head -n1)"
+        },
+        "files": {
+            "full_backup": "full_backup_${TIMESTAMP}.dump",
+            "schema_backup": "schema_backup_${TIMESTAMP}.sql",
+            "table_backups": [
+    EOF
+    
+    for table in "${CRITICAL_TABLES[@]}"; do
+        echo "            \"table_${table}_${TIMESTAMP}.dump\"," >> "$BACKUP_DIR/manifest_${TIMESTAMP}.json"
+    done
+    
+    # Remove trailing comma and close JSON
+    sed -i '$ s/,$//' "$BACKUP_DIR/manifest_${TIMESTAMP}.json"
+    cat >> "$BACKUP_DIR/manifest_${TIMESTAMP}.json" << EOF
+            ]
+        },
+        "backup_type": "full",
+        "retention_policy": {
+            "days": $RETENTION_DAYS
+        }
+    }
+    EOF
+    
+    # Upload to S3 if configured
+    if [ ! -z "$AWS_ACCESS_KEY_ID" ]; then
+        log "Uploading backups to S3"
+        
+        # Install AWS CLI if not present
+        if ! command -v aws &> /dev/null; then
+            log "Installing AWS CLI"
+            apk add --no-cache aws-cli
+        fi
+        
+        # Upload files
+        aws s3 cp "$BACKUP_DIR/" "s3://$S3_BUCKET/postgres/$(date +%Y/%m/%d)/" \
+            --recursive \
+            --storage-class STANDARD_IA \
+            --metadata "backup-timestamp=${TIMESTAMP},database=${DB_NAME}"
+        
+        if [ $? -eq 0 ]; then
+            log "Backup uploaded to S3 successfully"
+        else
+            log "ERROR: Failed to upload backup to S3"
+        fi
+    fi
+    
+    # Upload to Google Cloud Storage if configured
+    if [ ! -z "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+        log "Uploading backups to Google Cloud Storage"
+        
+        # Install gsutil if not present
+        if ! command -v gsutil &> /dev/null; then
+            log "Installing Google Cloud SDK"
+            apk add --no-cache python3 py3-pip
+            pip3 install google-cloud-storage
+        fi
+        
+        gsutil -m cp -r "$BACKUP_DIR/*" "gs://$GCS_BACKUP_BUCKET/postgres/$(date +%Y/%m/%d)/"
+        
+        if [ $? -eq 0 ]; then
+            log "Backup uploaded to GCS successfully"
+        else
+            log "ERROR: Failed to upload backup to GCS"
+        fi
+    fi
+    
+    # Cleanup old local backups
+    log "Cleaning up old local backups (older than $RETENTION_DAYS days)"
+    find $BACKUP_DIR -name "*.dump" -type f -mtime +$RETENTION_DAYS -delete
+    find $BACKUP_DIR -name "*.sql" -type f -mtime +$RETENTION_DAYS -delete
+    find $BACKUP_DIR -name "*.json" -type f -mtime +$RETENTION_DAYS -delete
+    
+    # Verify backup integrity
+    log "Verifying backup integrity"
+    pg_restore --list "$FULL_BACKUP_FILE" > /dev/null
+    if [ $? -eq 0 ]; then
+        log "Backup integrity check passed"
+    else
+        log "ERROR: Backup integrity check failed"
+        exit 1
+    fi
+    
+    # Send backup report
+    if [ ! -z "$BACKUP_WEBHOOK_URL" ]; then
+        log "Sending backup report to webhook"
+        curl -X POST "$BACKUP_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{
+                "timestamp": "'$TIMESTAMP'",
+                "status": "success",
+                "database": "'$DB_NAME'",
+                "backup_size": "'$FULL_BACKUP_SIZE'",
+                "files_created": '$(ls -1 $BACKUP_DIR/*${TIMESTAMP}* | wc -l)'
+            }'
+    fi
+    
+    log "PostgreSQL backup process completed successfully"
+
+  restore.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Configuration
+    RESTORE_TIMESTAMP="$1"
+    BACKUP_DIR="/backups/postgres"
+    DB_HOST="${DB_HOST:-postgres-primary-service}"
+    DB_PORT="${DB_PORT:-5432}"
+    DB_NAME="${DB_NAME:-omc_erp_prod}"
+    RESTORE_DB_NAME="${RESTORE_DB_NAME:-${DB_NAME}_restored_$(date +%Y%m%d_%H%M%S)}"
+    
+    # Function to log with timestamp
+    log() {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    }
+    
+    if [ -z "$RESTORE_TIMESTAMP" ]; then
+        log "ERROR: Please provide backup timestamp as argument"
+        log "Usage: $0 <timestamp>"
+        log "Available backups:"
+        ls -1 $BACKUP_DIR/full_backup_*.dump | sed 's/.*full_backup_\(.*\)\.dump/\1/' | sort -r | head -10
+        exit 1
+    fi
+    
+    BACKUP_FILE="$BACKUP_DIR/full_backup_${RESTORE_TIMESTAMP}.dump"
+    
+    if [ ! -f "$BACKUP_FILE" ]; then
+        log "ERROR: Backup file not found: $BACKUP_FILE"
+        
+        # Try to download from S3 if configured
+        if [ ! -z "$AWS_ACCESS_KEY_ID" ]; then
+            log "Attempting to download backup from S3"
+            YEAR=$(echo $RESTORE_TIMESTAMP | cut -c1-4)
+            MONTH=$(echo $RESTORE_TIMESTAMP | cut -c5-6)
+            DAY=$(echo $RESTORE_TIMESTAMP | cut -c7-8)
+            
+            aws s3 cp "s3://${S3_BACKUP_BUCKET}/postgres/${YEAR}/${MONTH}/${DAY}/" "$BACKUP_DIR/" \
+                --recursive \
+                --include "*${RESTORE_TIMESTAMP}*"
+        fi
+        
+        if [ ! -f "$BACKUP_FILE" ]; then
+            log "ERROR: Could not locate backup file after download attempt"
+            exit 1
+        fi
+    fi
+    
+    log "Starting PostgreSQL restore process"
+    log "Backup file: $BACKUP_FILE"
+    log "Target database: $RESTORE_DB_NAME"
+    
+    # Verify backup file integrity
+    log "Verifying backup integrity"
+    pg_restore --list "$BACKUP_FILE" > /dev/null
+    if [ $? -ne 0 ]; then
+        log "ERROR: Backup file integrity check failed"
+        exit 1
+    fi
+    
+    # Create target database
+    log "Creating target database: $RESTORE_DB_NAME"
+    createdb -h $DB_HOST -p $DB_PORT -U $DB_USERNAME "$RESTORE_DB_NAME"
+    
+    # Restore database
+    log "Restoring database from backup"
+    pg_restore -h $DB_HOST -p $DB_PORT -U $DB_USERNAME \
+        --dbname="$RESTORE_DB_NAME" \
+        --verbose \
+        --clean \
+        --if-exists \
+        --no-owner \
+        --no-privileges \
+        "$BACKUP_FILE"
+    
+    if [ $? -eq 0 ]; then
+        log "Database restore completed successfully"
+        log "Restored database: $RESTORE_DB_NAME"
+        
+        # Run post-restore verification
+        log "Running post-restore verification"
+        TABLE_COUNT=$(psql -h $DB_HOST -p $DB_PORT -U $DB_USERNAME -d "$RESTORE_DB_NAME" \
+            -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';")
+        
+        log "Restored $TABLE_COUNT tables"
+        
+        # Check critical tables
+        CRITICAL_TABLES=("fuel_transactions" "customers" "stations" "journal_entries")
+        for table in "${CRITICAL_TABLES[@]}"; do
+            ROW_COUNT=$(psql -h $DB_HOST -p $DB_PORT -U $DB_USERNAME -d "$RESTORE_DB_NAME" \
+                -t -c "SELECT count(*) FROM $table;" 2>/dev/null || echo "0")
+            log "Table $table: $ROW_COUNT rows"
+        done
+        
+    else
+        log "ERROR: Database restore failed"
+        exit 1
+    fi
+    
+    log "PostgreSQL restore process completed"
+
+  point-in-time-recovery.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Point-in-Time Recovery (PITR) script
+    TARGET_TIME="$1"
+    BACKUP_TIMESTAMP="$2"
+    
+    log() {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    }
+    
+    if [ -z "$TARGET_TIME" ] || [ -z "$BACKUP_TIMESTAMP" ]; then
+        log "ERROR: Please provide target time and backup timestamp"
+        log "Usage: $0 <target_time> <backup_timestamp>"
+        log "Example: $0 '2025-01-15 14:30:00' 20250115_120000"
+        exit 1
+    fi
+    
+    log "Starting Point-in-Time Recovery to: $TARGET_TIME"
+    log "Base backup: $BACKUP_TIMESTAMP"
+    
+    # This would integrate with PostgreSQL WAL archiving
+    # Implementation depends on your WAL archiving setup
+    log "PITR functionality requires WAL archiving to be configured"
+    log "Please ensure continuous archiving is enabled in PostgreSQL"
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup-daily
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    backup.type: daily
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM Ghana time
+  timeZone: "Africa/Accra"
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: postgres-backup-job
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+          containers:
+          - name: postgres-backup
+            image: postgres:15-alpine
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/sh", "/scripts/backup.sh"]
+            env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: omc-erp-config
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: omc-erp-config
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: omc-erp-config
+                  key: DB_NAME
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: omc-erp-secrets
+                  key: DB_USERNAME
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: omc-erp-secrets
+                  key: DB_PASSWORD
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backup-secrets
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backup-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: S3_BACKUP_BUCKET
+              value: "omc-erp-backups-prod"
+            - name: GCS_BACKUP_BUCKET
+              value: "omc-erp-backups-gcs"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/secrets/gcs/service-account.json"
+            - name: RETENTION_DAYS
+              value: "30"
+            - name: BACKUP_WEBHOOK_URL
+              value: "https://monitoring.erp.omc.gov.gh/api/backup-webhook"
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backups
+            - name: backup-scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: gcs-credentials
+              mountPath: /secrets/gcs
+              readOnly: true
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: postgres-backup-storage
+          - name: backup-scripts
+            configMap:
+              name: postgres-backup-scripts
+              defaultMode: 0755
+          - name: gcs-credentials
+            secret:
+              secretName: backup-secrets
+              items:
+              - key: GCS_SERVICE_ACCOUNT_JSON
+                path: service-account.json
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup-weekly
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    backup.type: weekly
+spec:
+  schedule: "0 1 * * 0"  # Weekly on Sunday at 1 AM
+  timeZone: "Africa/Accra"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: postgres-backup-weekly
+            image: postgres:15-alpine
+            command: ["/bin/sh", "/scripts/backup.sh"]
+            env:
+            - name: RETENTION_DAYS
+              value: "90"  # Keep weekly backups for 90 days
+            - name: BACKUP_TYPE
+              value: "weekly"
+            # ... (same env vars as daily backup)
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backups
+            - name: backup-scripts
+              mountPath: /scripts
+              readOnly: true
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: postgres-backup-storage
+          - name: backup-scripts
+            configMap:
+              name: postgres-backup-scripts
+              defaultMode: 0755
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backup-storage
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: postgres-backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: standard
+
+---
+# Backup Restore Job Template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-restore-template
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: postgres-restore
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: postgres-restore
+        image: postgres:15-alpine
+        command: ["/bin/sh", "/scripts/restore.sh"]
+        args: ["$(RESTORE_TIMESTAMP)"]
+        env:
+        - name: RESTORE_TIMESTAMP
+          value: "REPLACE_WITH_TIMESTAMP"
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: omc-erp-config
+              key: DB_HOST
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: DB_USERNAME
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: DB_PASSWORD
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backups
+        - name: backup-scripts
+          mountPath: /scripts
+          readOnly: true
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: postgres-backup-storage
+      - name: backup-scripts
+        configMap:
+          name: postgres-backup-scripts
+          defaultMode: 0755
+
+---
+# Backup Monitoring ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres-backup-monitor
+  namespace: omc-erp-monitoring
+  labels:
+    app.kubernetes.io/name: postgres-backup-monitor
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-backup-metrics
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics

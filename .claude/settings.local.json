@@ -20,7 +20,9 @@
       "Bash(psql:*)",
       "Bash(rm:*)",
       "Bash(touch:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(chmod:*)",
+      "Bash(bash:*)"
     ],
     "deny": [],
     "ask": []

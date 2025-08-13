@@ -1,0 +1,597 @@
+# Comprehensive Network Security Policies for OMC ERP System
+---
+# Default Deny All Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: network-security
+    policy.type: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+---
+# API Gateway Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-policy
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: api-gateway-security
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from load balancer/ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: istio-system
+    ports:
+    - protocol: TCP
+      port: 3000
+  # Allow monitoring access
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp-monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+  egress:
+  # Allow egress to all microservices
+  - to:
+    - podSelector:
+        matchLabels:
+          component: microservice
+    ports:
+    - protocol: TCP
+      port: 3001  # auth-service
+    - protocol: TCP
+      port: 3002  # transaction-service
+    - protocol: TCP
+      port: 3003  # station-service
+    - protocol: TCP
+      port: 3004  # pricing-service
+    - protocol: TCP
+      port: 3005  # uppf-service
+    - protocol: TCP
+      port: 3006  # regulatory-service
+    - protocol: TCP
+      port: 3007  # configuration-service
+    - protocol: TCP
+      port: 3008  # accounting-service
+    - protocol: TCP
+      port: 3009  # inventory-service
+    - protocol: TCP
+      port: 3010  # customer-service
+    - protocol: TCP
+      port: 3011  # fleet-service
+    - protocol: TCP
+      port: 3012  # payment-service
+  # Allow Redis access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis-master
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow Kafka access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow external HTTPS for third-party APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+
+---
+# Database Access Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: database-access-policy
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: database-security
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres-primary
+  policyTypes:
+  - Ingress
+  ingress:
+  # Only allow microservices to access database
+  - from:
+    - podSelector:
+        matchLabels:
+          component: microservice
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow backup jobs
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgres-backup-job
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp-monitoring
+    ports:
+    - protocol: TCP
+      port: 9187  # postgres-exporter
+
+---
+# Redis Access Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-access-policy
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: redis-security
+spec:
+  podSelector:
+    matchLabels:
+      app: redis-master
+  policyTypes:
+  - Ingress
+  ingress:
+  # Only allow specific services to access Redis
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    - podSelector:
+        matchLabels:
+          app: auth-service
+    - podSelector:
+        matchLabels:
+          app: transaction-service
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp-monitoring
+    ports:
+    - protocol: TCP
+      port: 9121  # redis-exporter
+
+---
+# Microservices Communication Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: microservices-communication-policy
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: microservices-security
+spec:
+  podSelector:
+    matchLabels:
+      component: microservice
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from API Gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 3001
+    - protocol: TCP
+      port: 3002
+    - protocol: TCP
+      port: 3003
+    - protocol: TCP
+      port: 3004
+    - protocol: TCP
+      port: 3005
+    - protocol: TCP
+      port: 3006
+    - protocol: TCP
+      port: 3007
+    - protocol: TCP
+      port: 3008
+    - protocol: TCP
+      port: 3009
+    - protocol: TCP
+      port: 3010
+    - protocol: TCP
+      port: 3011
+    - protocol: TCP
+      port: 3012
+  # Allow service-to-service communication (limited)
+  - from:
+    - podSelector:
+        matchLabels:
+          component: microservice
+    ports:
+    - protocol: TCP
+      port: 3001
+    - protocol: TCP
+      port: 3002
+    - protocol: TCP
+      port: 3003
+    - protocol: TCP
+      port: 3004
+    - protocol: TCP
+      port: 3005
+    - protocol: TCP
+      port: 3006
+    - protocol: TCP
+      port: 3007
+    - protocol: TCP
+      port: 3008
+    - protocol: TCP
+      port: 3009
+    - protocol: TCP
+      port: 3010
+    - protocol: TCP
+      port: 3011
+    - protocol: TCP
+      port: 3012
+  # Allow monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp-monitoring
+    ports:
+    - protocol: TCP
+      port: 9090  # metrics
+  egress:
+  # Allow database access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres-primary
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow read replica access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres-replica
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow TimescaleDB access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: timescaledb
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow Redis access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis-master
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow Kafka access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow external APIs (Ghana-specific)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+
+---
+# Monitoring Namespace Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-access-policy
+  namespace: omc-erp-monitoring
+  labels:
+    app.kubernetes.io/name: monitoring-security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow access from administrators
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp
+    - podSelector:
+        matchLabels:
+          role: admin
+  # Allow Grafana dashboard access
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: istio-system
+    ports:
+    - protocol: TCP
+      port: 3000  # Grafana
+  egress:
+  # Allow monitoring to scrape all services
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp-logging
+    - namespaceSelector:
+        matchLabels:
+          name: istio-system
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow external alerting (PagerDuty, Slack, etc.)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# Logging Namespace Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: logging-access-policy
+  namespace: omc-erp-logging
+  labels:
+    app.kubernetes.io/name: logging-security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow log ingestion from all namespaces
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 5044  # Logstash beats input
+    - protocol: TCP
+      port: 8080  # Logstash HTTP input
+  # Allow Elasticsearch cluster communication
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: elasticsearch
+    ports:
+    - protocol: TCP
+      port: 9200
+    - protocol: TCP
+      port: 9300
+  # Allow Kibana access
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: istio-system
+    ports:
+    - protocol: TCP
+      port: 5601  # Kibana
+  egress:
+  # Allow Kafka access for log streaming
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: omc-erp
+    - podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+---
+# Development Environment Network Policy (Staging/Dev)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: development-access-policy
+  namespace: omc-erp-dev
+  labels:
+    app.kubernetes.io/name: development-security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  # More permissive policies for development
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          environment: development
+  egress:
+  - to: []
+
+---
+# Critical Services Protection Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: critical-services-protection
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: critical-services-security
+spec:
+  podSelector:
+    matchLabels:
+      criticality: high
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Only allow authenticated and authorized access
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    - podSelector:
+        matchLabels:
+          role: admin
+    ports:
+    - protocol: TCP
+      port: 3001  # auth-service
+    - protocol: TCP
+      port: 3002  # transaction-service
+    - protocol: TCP
+      port: 3008  # accounting-service
+  egress:
+  # Restrict egress to necessary services only
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres-primary
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+# External API Access Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-api-access-policy
+  namespace: omc-erp
+  labels:
+    app.kubernetes.io/name: external-api-security
+spec:
+  podSelector:
+    matchLabels:
+      external-access: required
+  policyTypes:
+  - Egress
+  egress:
+  # Allow access to Ghana-specific APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+  # Specific endpoints can be restricted using CIDR blocks
+  # Example for Bank of Ghana API
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    # Add specific CIDR blocks if known
+
+---
+# Test Environment Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: test-environment-policy
+  namespace: omc-erp-staging
+  labels:
+    app.kubernetes.io/name: test-security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  # Staging environment with controlled external access
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: istio-system
+    - podSelector:
+        matchLabels:
+          role: tester
+  egress:
+  # Limited external access for testing
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443

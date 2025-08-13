@@ -1,0 +1,449 @@
+# PostgreSQL Primary-Replica Setup with High Availability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-primary-config
+  namespace: omc-erp
+data:
+  postgresql.conf: |
+    # Connection Settings
+    listen_addresses = '*'
+    port = 5432
+    max_connections = 200
+    
+    # Memory Settings
+    shared_buffers = 256MB
+    effective_cache_size = 1GB
+    work_mem = 4MB
+    maintenance_work_mem = 64MB
+    
+    # WAL Settings for Replication
+    wal_level = replica
+    max_wal_senders = 3
+    wal_keep_size = 64
+    
+    # Checkpoints
+    checkpoint_completion_target = 0.9
+    max_wal_size = 1GB
+    min_wal_size = 80MB
+    
+    # Logging
+    log_destination = 'stderr'
+    logging_collector = on
+    log_directory = '/var/log/postgresql'
+    log_filename = 'postgresql.log'
+    log_statement = 'all'
+    log_min_duration_statement = 1000
+    
+    # Performance
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    
+  pg_hba.conf: |
+    # TYPE  DATABASE        USER            ADDRESS                 METHOD
+    local   all             all                                     trust
+    host    all             all             127.0.0.1/32            md5
+    host    all             all             ::1/128                 md5
+    host    all             all             10.0.0.0/8              md5
+    host    all             all             172.16.0.0/12           md5
+    host    all             all             192.168.0.0/16          md5
+    
+    # Replication connections
+    host    replication     replicator      10.0.0.0/8              md5
+    host    replication     replicator      172.16.0.0/12           md5
+    host    replication     replicator      192.168.0.0/16          md5
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-primary
+  namespace: omc-erp
+  labels:
+    app: postgres-primary
+    component: database
+spec:
+  serviceName: postgres-primary-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-primary
+  template:
+    metadata:
+      labels:
+        app: postgres-primary
+        component: database
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: omc-erp-config
+              key: DB_NAME
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: DB_USERNAME
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: DB_PASSWORD
+        - name: POSTGRES_REPLICATION_MODE
+          value: master
+        - name: POSTGRES_REPLICATION_USER
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: POSTGRES_REPL_USER
+        - name: POSTGRES_REPLICATION_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: POSTGRES_REPL_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - name: postgres
+          containerPort: 5432
+          protocol: TCP
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 1
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        - name: postgres-config
+          mountPath: /etc/postgresql/postgresql.conf
+          subPath: postgresql.conf
+        - name: postgres-config
+          mountPath: /etc/postgresql/pg_hba.conf
+          subPath: pg_hba.conf
+        - name: postgres-init
+          mountPath: /docker-entrypoint-initdb.d
+        securityContext:
+          runAsUser: 999
+          runAsGroup: 999
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+      
+      # PostgreSQL Exporter for Prometheus
+      - name: postgres-exporter
+        image: prometheuscommunity/postgres-exporter:latest
+        env:
+        - name: DATA_SOURCE_NAME
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:5432/$(POSTGRES_DB)?sslmode=disable
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: DB_USERNAME
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: DB_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: omc-erp-config
+              key: DB_NAME
+        ports:
+        - name: metrics
+          containerPort: 9187
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      
+      volumes:
+      - name: postgres-config
+        configMap:
+          name: postgres-primary-config
+      - name: postgres-init
+        configMap:
+          name: postgres-init-scripts
+      
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - postgres-primary
+            topologyKey: kubernetes.io/hostname
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Gi
+      storageClassName: fast-ssd
+
+---
+# PostgreSQL Read Replica
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-replica
+  namespace: omc-erp
+  labels:
+    app: postgres-replica
+    component: database-replica
+spec:
+  serviceName: postgres-replica-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: postgres-replica
+  template:
+    metadata:
+      labels:
+        app: postgres-replica
+        component: database-replica
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_MASTER_SERVICE
+          value: postgres-primary-service
+        - name: POSTGRES_REPLICATION_MODE
+          value: slave
+        - name: POSTGRES_REPLICATION_USER
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: POSTGRES_REPL_USER
+        - name: POSTGRES_REPLICATION_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: omc-erp-secrets
+              key: POSTGRES_REPL_PASSWORD
+        - name: POSTGRES_MASTER_PORT_NUMBER
+          value: "5432"
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - name: postgres
+          containerPort: 5432
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: postgres-replica-data
+          mountPath: /var/lib/postgresql/data
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-replica-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Gi
+      storageClassName: fast-ssd
+
+---
+# PostgreSQL Primary Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-primary-service
+  namespace: omc-erp
+  labels:
+    app: postgres-primary
+    component: database
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9187"
+spec:
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+  - name: metrics
+    port: 9187
+    targetPort: 9187
+  selector:
+    app: postgres-primary
+  type: ClusterIP
+
+---
+# PostgreSQL Replica Service (Read-only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-replica-service
+  namespace: omc-erp
+  labels:
+    app: postgres-replica
+    component: database-replica
+spec:
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+  selector:
+    app: postgres-replica
+  type: ClusterIP
+
+---
+# PostgreSQL Headless Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-primary-headless
+  namespace: omc-erp
+  labels:
+    app: postgres-primary
+spec:
+  ports:
+  - name: postgres
+    port: 5432
+  selector:
+    app: postgres-primary
+  clusterIP: None
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-replica-headless
+  namespace: omc-erp
+  labels:
+    app: postgres-replica
+spec:
+  ports:
+  - name: postgres
+    port: 5432
+  selector:
+    app: postgres-replica
+  clusterIP: None
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-primary-pdb
+  namespace: omc-erp
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres-primary
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-replica-pdb
+  namespace: omc-erp
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres-replica
+
+---
+# PostgreSQL Init Scripts ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: omc-erp
+data:
+  01-init-extensions.sql: |
+    -- Create necessary extensions
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
+    CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+    CREATE EXTENSION IF NOT EXISTS "btree_gin";
+    CREATE EXTENSION IF NOT EXISTS "btree_gist";
+    
+    -- Create monitoring user for metrics
+    CREATE USER postgres_exporter WITH PASSWORD 'exporter_password';
+    GRANT pg_monitor TO postgres_exporter;
+    
+  02-create-databases.sql: |
+    -- Create additional databases if needed
+    SELECT 'CREATE DATABASE omc_erp_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'omc_erp_test')\gexec
+    
+  03-performance-tuning.sql: |
+    -- Performance tuning settings
+    ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';
+    ALTER SYSTEM SET track_activity_query_size = 2048;
+    ALTER SYSTEM SET track_io_timing = on;
+    
+    -- Select pg_reload_conf();
+    
+  99-grant-permissions.sql: |
+    -- Grant necessary permissions
+    GRANT ALL PRIVILEGES ON DATABASE omc_erp_prod TO postgres;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;
