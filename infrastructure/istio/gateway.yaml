@@ -1,0 +1,463 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: omc-erp-gateway
+  namespace: omc-erp
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*.omc-erp.com"
+    - "api.omc-erp.com"
+    - "dashboard.omc-erp.com"
+    tls:
+      httpsRedirect: true
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    hosts:
+    - "*.omc-erp.com"
+    - "api.omc-erp.com"
+    - "dashboard.omc-erp.com"
+    tls:
+      mode: SIMPLE
+      credentialName: omc-erp-tls
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: omc-erp-vs
+  namespace: omc-erp
+spec:
+  hosts:
+  - "api.omc-erp.com"
+  gateways:
+  - omc-erp-gateway
+  http:
+  # Authentication Service
+  - match:
+    - uri:
+        prefix: "/api/v1/auth"
+    route:
+    - destination:
+        host: auth-service
+        port:
+          number: 3001
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 100ms
+  
+  # Pricing Service
+  - match:
+    - uri:
+        prefix: "/api/v1/pricing"
+    route:
+    - destination:
+        host: pricing-service
+        port:
+          number: 3002
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+  
+  # UPPF Service
+  - match:
+    - uri:
+        prefix: "/api/v1/uppf"
+    route:
+    - destination:
+        host: uppf-service
+        port:
+          number: 3003
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+  
+  # Transaction Service
+  - match:
+    - uri:
+        prefix: "/api/v1/transactions"
+    route:
+    - destination:
+        host: transaction-service
+        port:
+          number: 3004
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+  
+  # Payment Service (Mobile Money)
+  - match:
+    - uri:
+        prefix: "/api/v1/payments"
+    route:
+    - destination:
+        host: payment-service
+        port:
+          number: 3005
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+  
+  # AI Forecasting Service
+  - match:
+    - uri:
+        prefix: "/api/v1/forecast"
+    route:
+    - destination:
+        host: ai-forecasting-service
+        port:
+          number: 3006
+    retries:
+      attempts: 3
+      perTryTimeout: 15s
+    timeout: 60s
+  
+  # IoT Service
+  - match:
+    - uri:
+        prefix: "/api/v1/iot"
+    route:
+    - destination:
+        host: iot-service
+        port:
+          number: 3007
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+  
+  # Regulatory Service
+  - match:
+    - uri:
+        prefix: "/api/v1/regulatory"
+    route:
+    - destination:
+        host: regulatory-service
+        port:
+          number: 3008
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+  
+  # Fraud Detection Service
+  - match:
+    - uri:
+        prefix: "/api/v1/fraud"
+    route:
+    - destination:
+        host: fraud-detection-service
+        port:
+          number: 3009
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+  
+  # Forex Service
+  - match:
+    - uri:
+        prefix: "/api/v1/forex"
+    route:
+    - destination:
+        host: forex-service
+        port:
+          number: 3010
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: dashboard-vs
+  namespace: omc-erp
+spec:
+  hosts:
+  - "dashboard.omc-erp.com"
+  gateways:
+  - omc-erp-gateway
+  http:
+  - match:
+    - uri:
+        prefix: "/"
+    route:
+    - destination:
+        host: dashboard-service
+        port:
+          number: 3000
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+    timeout: 30s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: auth-service-dr
+  namespace: omc-erp
+spec:
+  host: auth-service
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_CONN
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 3
+        connectTimeout: 10s
+        h2UpgradePolicy: UPGRADE
+    circuitBreaker:
+      consecutiveGatewayErrors: 5
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+  portLevelSettings:
+  - port:
+      number: 3001
+    loadBalancer:
+      simple: LEAST_CONN
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-service-dr
+  namespace: omc-erp
+spec:
+  host: payment-service
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN
+    connectionPool:
+      tcp:
+        maxConnections: 50
+      http:
+        http1MaxPendingRequests: 25
+        http2MaxRequests: 50
+        maxRequestsPerConnection: 5
+        maxRetries: 5
+        connectTimeout: 15s
+    circuitBreaker:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 3
+      interval: 20s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 50
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: ai-forecasting-dr
+  namespace: omc-erp
+spec:
+  host: ai-forecasting-service
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_CONN
+    connectionPool:
+      tcp:
+        maxConnections: 25
+      http:
+        http1MaxPendingRequests: 10
+        http2MaxRequests: 25
+        maxRequestsPerConnection: 3
+        maxRetries: 2
+        connectTimeout: 20s
+    circuitBreaker:
+      consecutiveGatewayErrors: 2
+      consecutive5xxErrors: 2
+      interval: 60s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 30
+      minHealthPercent: 70
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: omc-erp
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: auth-service-authz
+  namespace: omc-erp
+spec:
+  selector:
+    matchLabels:
+      app: auth-service
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+    - source:
+        namespaces: ["omc-erp"]
+  - to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/api/v1/auth/*", "/health", "/ready", "/metrics"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all-default
+  namespace: omc-erp
+spec:
+  {}
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-authenticated
+  namespace: omc-erp
+spec:
+  rules:
+  - from:
+    - source:
+        requestPrincipals: ["*"]
+  - to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
+    when:
+    - key: request.headers[authorization]
+      values: ["Bearer *"]
+---
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: default-metrics
+  namespace: omc-erp
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        destination_service_name:
+          operation: UPSERT
+          value: "%{DESTINATION_SERVICE_NAME | 'unknown'}"
+        source_app:
+          operation: UPSERT
+          value: "%{SOURCE_APP | 'unknown'}"
+        destination_app:
+          operation: UPSERT
+          value: "%{DESTINATION_APP | 'unknown'}"
+---
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: omc-erp-istio
+  namespace: istio-system
+spec:
+  values:
+    global:
+      meshID: omc-erp-mesh
+      multiCluster:
+        clusterName: omc-erp-cluster
+      network: omc-erp-network
+  components:
+    ingressGateways:
+    - name: istio-ingressgateway
+      enabled: true
+      k8s:
+        service:
+          type: LoadBalancer
+          ports:
+          - port: 15021
+            targetPort: 15021
+            name: status-port
+            protocol: TCP
+          - port: 80
+            targetPort: 8080
+            name: http2
+            protocol: TCP
+          - port: 443
+            targetPort: 8443
+            name: https
+            protocol: TCP
+        hpaSpec:
+          minReplicas: 2
+          maxReplicas: 5
+          metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 80
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 2000m
+            memory: 1024Mi
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        hpaSpec:
+          minReplicas: 2
+          maxReplicas: 5
+    egressGateways:
+    - name: istio-egressgateway
+      enabled: true
+      k8s:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+  meshConfig:
+    defaultConfig:
+      gatewayTopology:
+        numTrustedProxies: 2
+      proxyStatsMatcher:
+        inclusionRegexps:
+        - ".*outlier_detection.*"
+        - ".*circuit_breakers.*"
+        - ".*upstream_rq_retry.*"
+        - ".*upstream_rq_pending.*"
+        - ".*_cx_.*"
+    extensionProviders:
+    - name: prometheus
+      prometheus:
+        configOverride:
+          disable_host_header_fallback: true

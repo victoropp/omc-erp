@@ -1,0 +1,181 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omc-erp-config
+  namespace: omc-erp
+data:
+  # Database Configuration
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "omc_erp"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  
+  # Kafka Configuration
+  KAFKA_BROKER: "kafka-service:9092"
+  
+  # Service Discovery
+  AUTH_SERVICE_URL: "http://auth-service:3001"
+  PRICING_SERVICE_URL: "http://pricing-service:3002"
+  UPPF_SERVICE_URL: "http://uppf-service:3003"
+  TRANSACTION_SERVICE_URL: "http://transaction-service:3004"
+  PAYMENT_SERVICE_URL: "http://payment-service:3005"
+  AI_FORECASTING_SERVICE_URL: "http://ai-forecasting-service:3006"
+  IOT_SERVICE_URL: "http://iot-service:3007"
+  REGULATORY_SERVICE_URL: "http://regulatory-service:3008"
+  FRAUD_DETECTION_SERVICE_URL: "http://fraud-detection-service:3009"
+  FOREX_SERVICE_URL: "http://forex-service:3010"
+  
+  # External APIs
+  MTN_MOMO_BASE_URL: "https://proxy.momoapi.mtn.com"
+  MTN_MOMO_ENVIRONMENT: "production"
+  BANK_OF_GHANA_API_URL: "https://api.bog.gov.gh"
+  NPA_API_URL: "https://api.npa.gov.gh"
+  GRA_API_URL: "https://api.gra.gov.gh"
+  
+  # Application Settings
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  JWT_EXPIRES_IN: "24h"
+  API_RATE_LIMIT: "1000"
+  
+  # Ghana-specific Settings
+  DEFAULT_CURRENCY: "GHS"
+  TIMEZONE: "Africa/Accra"
+  DEFAULT_LANGUAGE: "en"
+  
+  # Istio Settings
+  ISTIO_PROXY_IMAGE: "docker.io/istio/proxyv2:1.19.0"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: omc-erp-monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    rule_files:
+      - "/etc/prometheus/rules/*.yml"
+    
+    scrape_configs:
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+        - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: default;kubernetes;https
+      
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+        - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+      
+      - job_name: 'omc-erp-services'
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+            - omc-erp
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_service_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_service_name]
+          action: replace
+          target_label: kubernetes_name
+      
+      - job_name: 'istio-mesh'
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+            - istio-system
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: istio-proxy;http-monitoring
+      
+      - job_name: 'istio-policy'
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+            - istio-system
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: istio-policy;http-monitoring
+      
+      - job_name: 'istio-telemetry'
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+            - istio-system
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: istio-telemetry;http-monitoring
+    
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager:9093
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: omc-erp-monitoring
+data:
+  grafana.ini: |
+    [server]
+    root_url = %(protocol)s://%(domain)s:%(http_port)s/grafana/
+    serve_from_sub_path = true
+    
+    [auth.anonymous]
+    enabled = false
+    
+    [auth.basic]
+    enabled = true
+    
+    [security]
+    admin_user = admin
+    admin_password = ${GRAFANA_ADMIN_PASSWORD}
+    
+    [dashboards]
+    default_home_dashboard_path = /etc/grafana/dashboards/omc-overview.json
+    
+    [log]
+    mode = console
+    level = info

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omc-erp
+  labels:
+    name: omc-erp
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omc-erp-staging
+  labels:
+    name: omc-erp-staging
+    istio-injection: enabled
+    environment: staging
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omc-erp-monitoring
+  labels:
+    name: omc-erp-monitoring
+    environment: production
