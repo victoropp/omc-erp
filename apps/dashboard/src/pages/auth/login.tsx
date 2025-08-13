@@ -4,10 +4,12 @@ import { useRouter } from 'next/router';
 import { useAuthStore } from '@/stores/auth.store';
 import { FuturisticBackground } from '@/components/layout/FuturisticBackground';
 import { toast } from 'react-hot-toast';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function LoginPage() {
   const router = useRouter();
   const { login, isLoading } = useAuthStore();
+  const { actualTheme } = useTheme();
   const [formData, setFormData] = useState({
     email: 'admin@ghanaomc.com',
     password: 'password',
@@ -45,7 +47,9 @@ export default function LoginPage() {
         className="relative z-10 w-full max-w-md"
       >
         {/* Glassmorphism container */}
-        <div className="glass rounded-3xl p-8 border border-white/10 shadow-2xl">
+        <div className={`glass rounded-3xl p-8 shadow-2xl border transition-colors duration-300 ${
+          actualTheme === 'dark' ? 'border-white/10' : 'border-gray-200'
+        }`}>
           {/* Header */}
           <div className="text-center mb-8">
             <motion.div
@@ -59,7 +63,9 @@ export default function LoginPage() {
             <h1 className="text-3xl font-display font-bold text-gradient mb-2">
               Ghana OMC ERP
             </h1>
-            <p className="text-dark-400">
+            <p className={`transition-colors duration-300 ${
+              actualTheme === 'dark' ? 'text-dark-400' : 'text-gray-600'
+            }`}>
               Oil Marketing Company Management System
             </p>
           </div>
@@ -67,7 +73,9 @@ export default function LoginPage() {
           {/* Login form */}
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-white mb-2">
+              <label htmlFor="email" className={`block text-sm font-medium mb-2 transition-colors duration-300 ${
+                actualTheme === 'dark' ? 'text-white' : 'text-gray-700'
+              }`}>
                 Email Address
               </label>
               <input
@@ -77,13 +85,19 @@ export default function LoginPage() {
                 value={formData.email}
                 onChange={handleInputChange}
                 required
-                className="w-full px-4 py-3 glass rounded-xl border border-white/10 bg-transparent text-white placeholder-dark-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all duration-300"
+                className={`w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all duration-300 ${
+                  actualTheme === 'dark' 
+                    ? 'glass border-white/10 bg-transparent text-white placeholder-dark-400'
+                    : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                }`}
                 placeholder="Enter your email"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-white mb-2">
+              <label htmlFor="password" className={`block text-sm font-medium mb-2 transition-colors duration-300 ${
+                actualTheme === 'dark' ? 'text-white' : 'text-gray-700'
+              }`}>
                 Password
               </label>
               <input
@@ -93,7 +107,11 @@ export default function LoginPage() {
                 value={formData.password}
                 onChange={handleInputChange}
                 required
-                className="w-full px-4 py-3 glass rounded-xl border border-white/10 bg-transparent text-white placeholder-dark-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all duration-300"
+                className={`w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all duration-300 ${
+                  actualTheme === 'dark' 
+                    ? 'glass border-white/10 bg-transparent text-white placeholder-dark-400'
+                    : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                }`}
                 placeholder="Enter your password"
               />
             </div>
@@ -117,9 +135,15 @@ export default function LoginPage() {
           </form>
 
           {/* Demo credentials */}
-          <div className="mt-6 p-4 glass rounded-xl border border-secondary-500/30">
-            <h3 className="text-sm font-medium text-secondary-400 mb-2">Demo Credentials</h3>
-            <div className="text-xs text-dark-400 space-y-1">
+          <div className={`mt-6 p-4 glass rounded-xl border transition-colors duration-300 ${
+            actualTheme === 'dark' ? 'border-secondary-500/30' : 'border-blue-300'
+          }`}>
+            <h3 className={`text-sm font-medium mb-2 transition-colors duration-300 ${
+              actualTheme === 'dark' ? 'text-secondary-400' : 'text-blue-600'
+            }`}>Demo Credentials</h3>
+            <div className={`text-xs space-y-1 transition-colors duration-300 ${
+              actualTheme === 'dark' ? 'text-dark-400' : 'text-gray-600'
+            }`}>
               <div>Email: admin@ghanaomc.com</div>
               <div>Password: password</div>
             </div>
@@ -127,7 +151,9 @@ export default function LoginPage() {
 
           {/* Footer */}
           <div className="mt-6 text-center">
-            <p className="text-xs text-dark-500">
+            <p className={`text-xs transition-colors duration-300 ${
+              actualTheme === 'dark' ? 'text-dark-500' : 'text-gray-500'
+            }`}>
               © 2025 Ghana OMC ERP. All rights reserved.
             </p>
           </div>

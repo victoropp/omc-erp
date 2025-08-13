@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { SearchCommand } from '../ui/SearchCommand';
 import { NotificationCenter } from '../ui/NotificationCenter';
 import { ThemeToggle } from '../ui/ThemeToggle';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface FuturisticHeaderProps {
   onMenuClick: () => void;
@@ -11,6 +12,7 @@ interface FuturisticHeaderProps {
 
 export function FuturisticHeader({ onMenuClick }: FuturisticHeaderProps) {
   const { user } = useAuthStore();
+  const { actualTheme } = useTheme();
   const [currentTime, setCurrentTime] = useState(new Date());
   const [systemStatus, setSystemStatus] = useState('online');
 
@@ -32,7 +34,9 @@ export function FuturisticHeader({ onMenuClick }: FuturisticHeaderProps) {
     <motion.header
       initial={{ y: -20, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
-      className="sticky top-0 z-40 glass border-b border-white/10 backdrop-blur-xl"
+      className={`sticky top-0 z-40 glass backdrop-blur-xl border-b transition-colors duration-300 ${
+        actualTheme === 'dark' ? 'border-white/10' : 'border-gray-200'
+      }`}
     >
       <div className="px-6 py-4">
         <div className="flex items-center justify-between">
@@ -43,8 +47,11 @@ export function FuturisticHeader({ onMenuClick }: FuturisticHeaderProps) {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={onMenuClick}
-              className="lg:hidden p-2 rounded-xl glass border border-white/10 text-white 
-                       hover:bg-white/10 transition-all duration-300"
+              className={`lg:hidden p-2 rounded-xl glass border transition-all duration-300 ${
+                actualTheme === 'dark' 
+                  ? 'border-white/10 text-white hover:bg-white/10' 
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+              }`}
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
@@ -62,7 +69,9 @@ export function FuturisticHeader({ onMenuClick }: FuturisticHeaderProps) {
                 systemStatus === 'online' ? 'bg-green-400' : 
                 systemStatus === 'warning' ? 'bg-yellow-400' : 'bg-red-400'
               }`} />
-              <span className="text-sm text-white hidden md:inline">
+              <span className={`text-sm hidden md:inline transition-colors duration-300 ${
+                actualTheme === 'dark' ? 'text-white' : 'text-gray-700'
+              }`}>
                 System {systemStatus}
               </span>
             </motion.div>
@@ -71,7 +80,9 @@ export function FuturisticHeader({ onMenuClick }: FuturisticHeaderProps) {
             <motion.div
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="hidden lg:flex items-center space-x-2 glass rounded-lg px-3 py-1 border border-secondary-500/30"
+              className={`hidden lg:flex items-center space-x-2 glass rounded-lg px-3 py-1 border transition-colors duration-300 ${
+                actualTheme === 'dark' ? 'border-secondary-500/30' : 'border-blue-300'
+              }`}
             >
               <div className="w-2 h-2 rounded-full bg-secondary-400 animate-pulse" />
               <span className="text-sm text-secondary-400 font-medium">2025W03 Active</span>
@@ -91,13 +102,17 @@ export function FuturisticHeader({ onMenuClick }: FuturisticHeaderProps) {
               animate={{ opacity: 1, scale: 1 }}
               className="hidden lg:flex flex-col items-end"
             >
-              <div className="text-sm font-mono text-white">
+              <div className={`text-sm font-mono transition-colors duration-300 ${
+                actualTheme === 'dark' ? 'text-white' : 'text-gray-800'
+              }`}>
                 {currentTime.toLocaleTimeString('en-GB', { 
                   timeZone: 'Africa/Accra',
                   hour12: false 
                 })}
               </div>
-              <div className="text-xs text-dark-400">
+              <div className={`text-xs transition-colors duration-300 ${
+                actualTheme === 'dark' ? 'text-dark-400' : 'text-gray-600'
+              }`}>
                 {currentTime.toLocaleDateString('en-GB', { 
                   timeZone: 'Africa/Accra',
                   weekday: 'short',

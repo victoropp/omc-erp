@@ -7,7 +7,18 @@
       "Bash(npm run build:*)",
       "Bash(npm run dev:*)",
       "Bash(start http://localhost:3003)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(gh repo create:*)",
+      "Bash(git remote remove:*)",
+      "Bash(docker:*)",
+      "Bash(docker-compose:*)",
+      "Bash(cp:*)",
+      "Bash(timeout:*)",
+      "Bash(start http://localhost:3000)",
+      "Bash(psql:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []
