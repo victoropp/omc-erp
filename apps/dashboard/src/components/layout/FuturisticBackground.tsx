@@ -28,10 +28,16 @@ export function FuturisticBackground() {
       radius: number;
       color: string;
       opacity: number;
+      width: number;
+      height: number;
+      ctx: CanvasRenderingContext2D;
 
-      constructor() {
-        this.x = Math.random() * canvas.width;
-        this.y = Math.random() * canvas.height;
+      constructor(width: number, height: number, context: CanvasRenderingContext2D) {
+        this.width = width;
+        this.height = height;
+        this.ctx = context;
+        this.x = Math.random() * this.width;
+        this.y = Math.random() * this.height;
         this.vx = (Math.random() - 0.5) * 0.5;
         this.vy = (Math.random() - 0.5) * 0.5;
         this.radius = Math.random() * 2 + 0.5;
@@ -46,10 +52,10 @@ export function FuturisticBackground() {
         this.y += this.vy;
 
         // Wrap around edges
-        if (this.x < 0) this.x = canvas.width;
-        if (this.x > canvas.width) this.x = 0;
-        if (this.y < 0) this.y = canvas.height;
-        if (this.y > canvas.height) this.y = 0;
+        if (this.x < 0) this.x = this.width;
+        if (this.x > this.width) this.x = 0;
+        if (this.y < 0) this.y = this.height;
+        if (this.y > this.height) this.y = 0;
 
         // Subtle opacity pulsing
         this.opacity += (Math.random() - 0.5) * 0.01;
@@ -57,15 +63,15 @@ export function FuturisticBackground() {
       }
 
       draw() {
-        ctx.save();
-        ctx.globalAlpha = this.opacity;
-        ctx.fillStyle = this.color;
-        ctx.shadowColor = this.color;
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        this.ctx.save();
+        this.ctx.globalAlpha = this.opacity;
+        this.ctx.fillStyle = this.color;
+        this.ctx.shadowColor = this.color;
+        this.ctx.shadowBlur = 10;
+        this.ctx.beginPath();
+        this.ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.restore();
       }
     }
 
@@ -74,7 +80,7 @@ export function FuturisticBackground() {
     const particleCount = Math.min(100, Math.floor((canvas.width * canvas.height) / 10000));
     
     for (let i = 0; i < particleCount; i++) {
-      particles.push(new Particle());
+      particles.push(new Particle(canvas.width, canvas.height, ctx));
     }
 
     // Animation loop

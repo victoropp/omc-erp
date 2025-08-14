@@ -658,6 +658,691 @@ export class WebSocketService {
   }
 }
 
+// Product Management Service
+export class ProductService extends ApiService {
+  constructor() {
+    super('/products');
+  }
+
+  // Product CRUD Operations
+  async getProducts(filters?: any) {
+    const params = new URLSearchParams(filters).toString();
+    return this.get(`?${params}`);
+  }
+
+  async getProduct(id: string) {
+    return this.get(`/${id}`);
+  }
+
+  async createProduct(product: any) {
+    return this.post('', product);
+  }
+
+  async updateProduct(id: string, product: any) {
+    return this.put(`/${id}`, product);
+  }
+
+  async deleteProduct(id: string) {
+    return this.delete(`/${id}`);
+  }
+
+  async bulkUpdateProducts(products: any[]) {
+    return this.post('/bulk-update', { products });
+  }
+
+  // Product Categories
+  async getCategories() {
+    return this.get('/categories');
+  }
+
+  async createCategory(category: any) {
+    return this.post('/categories', category);
+  }
+
+  async updateCategory(id: string, category: any) {
+    return this.put(`/categories/${id}`, category);
+  }
+
+  async deleteCategory(id: string) {
+    return this.delete(`/categories/${id}`);
+  }
+
+  // Product Pricing Rules
+  async getPricingRules() {
+    return this.get('/pricing-rules');
+  }
+
+  async createPricingRule(rule: any) {
+    return this.post('/pricing-rules', rule);
+  }
+
+  async updatePricingRule(id: string, rule: any) {
+    return this.put(`/pricing-rules/${id}`, rule);
+  }
+
+  async deletePricingRule(id: string) {
+    return this.delete(`/pricing-rules/${id}`);
+  }
+
+  async activatePricingRule(id: string) {
+    return this.patch(`/pricing-rules/${id}/activate`);
+  }
+
+  async deactivatePricingRule(id: string) {
+    return this.patch(`/pricing-rules/${id}/deactivate`);
+  }
+
+  // Product Analytics
+  async getProductAnalytics(productId?: string) {
+    const endpoint = productId ? `/analytics/${productId}` : '/analytics';
+    return this.get(endpoint);
+  }
+
+  async getProductSalesData(productId: string, period: string) {
+    return this.get(`/analytics/${productId}/sales?period=${period}`);
+  }
+
+  async getProductInventoryData(productId: string) {
+    return this.get(`/analytics/${productId}/inventory`);
+  }
+
+  async getProductProfitability(period: string) {
+    return this.get(`/analytics/profitability?period=${period}`);
+  }
+
+  async getTopSellingProducts(limit?: number) {
+    return this.get(`/analytics/top-selling?limit=${limit || 10}`);
+  }
+
+  // Bulk Operations
+  async importProducts(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.post(`${this.baseUrl}/import`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  }
+
+  async exportProducts(format: 'csv' | 'xlsx' = 'xlsx') {
+    const response = await apiClient.get(`${this.baseUrl}/export?format=${format}`, {
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  // Product Specifications
+  async getProductSpecifications(productId: string) {
+    return this.get(`/${productId}/specifications`);
+  }
+
+  async updateProductSpecifications(productId: string, specifications: any) {
+    return this.put(`/${productId}/specifications`, specifications);
+  }
+}
+
+// Analytics Service
+export class AnalyticsService extends ApiService {
+  constructor() {
+    super('/analytics');
+  }
+
+  // Sales Analytics
+  async getSalesAnalytics(period: string = '30d', filters?: any) {
+    const params = new URLSearchParams({ period, ...filters }).toString();
+    return this.get(`/sales?${params}`);
+  }
+
+  async getSalesMetrics() {
+    return this.get('/sales/metrics');
+  }
+
+  async getSalesTrends(period: string = '12m') {
+    return this.get(`/sales/trends?period=${period}`);
+  }
+
+  async getTopCustomers(limit: number = 10) {
+    return this.get(`/sales/top-customers?limit=${limit}`);
+  }
+
+  async getSalesForecasting(horizon: string = '3m') {
+    return this.get(`/sales/forecasting?horizon=${horizon}`);
+  }
+
+  // Inventory Analytics
+  async getInventoryAnalytics() {
+    return this.get('/inventory');
+  }
+
+  async getInventoryTurnover(period: string = '12m') {
+    return this.get(`/inventory/turnover?period=${period}`);
+  }
+
+  async getStockoutAnalysis() {
+    return this.get('/inventory/stockout-analysis');
+  }
+
+  async getInventoryValuation() {
+    return this.get('/inventory/valuation');
+  }
+
+  async getSlowMovingStock(threshold: number = 90) {
+    return this.get(`/inventory/slow-moving?threshold=${threshold}`);
+  }
+
+  // Financial Analytics
+  async getFinancialAnalytics(period: string = '12m') {
+    return this.get(`/financial?period=${period}`);
+  }
+
+  async getProfitabilityAnalysis(period: string = '12m') {
+    return this.get(`/financial/profitability?period=${period}`);
+  }
+
+  async getCashFlowAnalysis() {
+    return this.get('/financial/cash-flow');
+  }
+
+  async getExpenseAnalysis(period: string = '12m') {
+    return this.get(`/financial/expenses?period=${period}`);
+  }
+
+  async getRevenueAnalysis(period: string = '12m') {
+    return this.get(`/financial/revenue?period=${period}`);
+  }
+
+  async getFinancialRatios() {
+    return this.get('/financial/ratios');
+  }
+
+  // Operational Analytics
+  async getOperationalAnalytics() {
+    return this.get('/operational');
+  }
+
+  async getEfficiencyMetrics() {
+    return this.get('/operational/efficiency');
+  }
+
+  async getCapacityUtilization() {
+    return this.get('/operational/capacity-utilization');
+  }
+
+  async getDowntimeAnalysis() {
+    return this.get('/operational/downtime');
+  }
+
+  async getProductivityMetrics() {
+    return this.get('/operational/productivity');
+  }
+
+  async getQualityMetrics() {
+    return this.get('/operational/quality');
+  }
+
+  // Real-time Analytics
+  async getRealTimeMetrics() {
+    return this.get('/real-time');
+  }
+
+  async getLiveTransactionData() {
+    return this.get('/real-time/transactions');
+  }
+
+  async getLiveInventoryLevels() {
+    return this.get('/real-time/inventory');
+  }
+
+  async getSystemPerformance() {
+    return this.get('/real-time/system-performance');
+  }
+
+  // Custom Reports
+  async generateCustomReport(config: any) {
+    return this.post('/reports/custom', config);
+  }
+
+  async getReportHistory() {
+    return this.get('/reports/history');
+  }
+
+  async scheduleReport(config: any) {
+    return this.post('/reports/schedule', config);
+  }
+}
+
+// Reports Service
+export class ReportsService extends ApiService {
+  constructor() {
+    super('/reports');
+  }
+
+  // Sales Reports
+  async getSalesReports(period: string = '1m', format: 'json' | 'pdf' | 'xlsx' = 'json') {
+    return this.get(`/sales?period=${period}&format=${format}`);
+  }
+
+  async getDailySalesReport(date: string) {
+    return this.get(`/sales/daily?date=${date}`);
+  }
+
+  async getMonthlySalesReport(month: string, year: string) {
+    return this.get(`/sales/monthly?month=${month}&year=${year}`);
+  }
+
+  async getSalesPerformanceReport(period: string = '3m') {
+    return this.get(`/sales/performance?period=${period}`);
+  }
+
+  // Inventory Reports
+  async getInventoryReports(asOf?: string) {
+    const params = asOf ? `?asOf=${asOf}` : '';
+    return this.get(`/inventory${params}`);
+  }
+
+  async getStockMovementReport(period: string = '1m') {
+    return this.get(`/inventory/stock-movement?period=${period}`);
+  }
+
+  async getInventoryAgeingReport() {
+    return this.get('/inventory/ageing');
+  }
+
+  async getStockReconciliationReport(date: string) {
+    return this.get(`/inventory/reconciliation?date=${date}`);
+  }
+
+  // Financial Reports
+  async getFinancialReports(period: string = '1m') {
+    return this.get(`/financial?period=${period}`);
+  }
+
+  async getIncomeStatement(period: string) {
+    return this.get(`/financial/income-statement?period=${period}`);
+  }
+
+  async getBalanceSheetReport(asOf: string) {
+    return this.get(`/financial/balance-sheet?asOf=${asOf}`);
+  }
+
+  async getCashFlowReport(period: string) {
+    return this.get(`/financial/cash-flow?period=${period}`);
+  }
+
+  async getTrialBalance(asOf: string) {
+    return this.get(`/financial/trial-balance?asOf=${asOf}`);
+  }
+
+  async getGeneralLedgerReport(accountId?: string, period?: string) {
+    const params = new URLSearchParams();
+    if (accountId) params.append('accountId', accountId);
+    if (period) params.append('period', period);
+    return this.get(`/financial/general-ledger?${params.toString()}`);
+  }
+
+  // Regulatory Reports
+  async getRegulatoryReports() {
+    return this.get('/regulatory');
+  }
+
+  async getNPAReport(period: string) {
+    return this.get(`/regulatory/npa?period=${period}`);
+  }
+
+  async getEPAReport(period: string) {
+    return this.get(`/regulatory/epa?period=${period}`);
+  }
+
+  async getGRAReport(period: string) {
+    return this.get(`/regulatory/gra?period=${period}`);
+  }
+
+  async getBOGReport(period: string) {
+    return this.get(`/regulatory/bog?period=${period}`);
+  }
+
+  async getUPPFReport(period: string) {
+    return this.get(`/regulatory/uppf?period=${period}`);
+  }
+
+  async getLocalContentReport(period: string) {
+    return this.get(`/regulatory/local-content?period=${period}`);
+  }
+
+  // Report Export and Scheduling
+  async exportReport(reportId: string, format: 'pdf' | 'xlsx' | 'csv') {
+    const response = await apiClient.get(`${this.baseUrl}/export/${reportId}?format=${format}`, {
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  async scheduleReport(config: any) {
+    return this.post('/schedule', config);
+  }
+
+  async getScheduledReports() {
+    return this.get('/scheduled');
+  }
+
+  async cancelScheduledReport(id: string) {
+    return this.delete(`/scheduled/${id}`);
+  }
+
+  // Report Templates
+  async getReportTemplates() {
+    return this.get('/templates');
+  }
+
+  async createReportTemplate(template: any) {
+    return this.post('/templates', template);
+  }
+
+  async updateReportTemplate(id: string, template: any) {
+    return this.put(`/templates/${id}`, template);
+  }
+
+  async deleteReportTemplate(id: string) {
+    return this.delete(`/templates/${id}`);
+  }
+}
+
+// Dealer Management Service
+export class DealerService extends ApiService {
+  constructor() {
+    super('/dealers');
+  }
+
+  // Dealer Management
+  async getDealers() {
+    return this.get('/');
+  }
+
+  async getDealer(id: string) {
+    return this.get(`/${id}`);
+  }
+
+  async createDealer(dealer: any) {
+    return this.post('/', dealer);
+  }
+
+  async updateDealer(id: string, dealer: any) {
+    return this.put(`/${id}`, dealer);
+  }
+
+  async onboardDealer(dealerData: any) {
+    return this.post('/onboard', dealerData);
+  }
+
+  // Dealer Performance
+  async getDealerPerformance(id?: string) {
+    return this.get(id ? `/performance/${id}` : '/performance');
+  }
+
+  async getDealerAnalytics() {
+    return this.get('/analytics');
+  }
+
+  // Dealer Loans
+  async getDealerLoans(dealerId?: string) {
+    return this.get(dealerId ? `/loans?dealerId=${dealerId}` : '/loans');
+  }
+
+  async createLoan(loanData: any) {
+    return this.post('/loans', loanData);
+  }
+
+  async processLoan(loanId: string, action: string) {
+    return this.post(`/loans/${loanId}/${action}`);
+  }
+
+  async getLoanHistory(dealerId: string) {
+    return this.get(`/loans/history/${dealerId}`);
+  }
+
+  // Dealer Compliance
+  async getDealerCompliance(dealerId?: string) {
+    return this.get(dealerId ? `/compliance/${dealerId}` : '/compliance');
+  }
+
+  async runComplianceCheck(dealerId: string) {
+    return this.post(`/compliance/check/${dealerId}`);
+  }
+
+  // Dealer Settlements
+  async getDealerSettlements(dealerId?: string) {
+    return this.get(dealerId ? `/settlements?dealerId=${dealerId}` : '/settlements');
+  }
+
+  async processSettlement(settlementId: string) {
+    return this.post(`/settlements/${settlementId}/process`);
+  }
+
+  async getSettlementHistory(dealerId: string) {
+    return this.get(`/settlements/history/${dealerId}`);
+  }
+
+  // Dealer Credit Management
+  async getCreditAnalysis(dealerId: string) {
+    return this.get(`/credit/${dealerId}`);
+  }
+
+  async updateCreditLimit(dealerId: string, limit: number) {
+    return this.put(`/credit/${dealerId}/limit`, { limit });
+  }
+
+  // Dealer Reporting
+  async getDealerReports(type: string, filters?: any) {
+    const params = new URLSearchParams(filters).toString();
+    return this.get(`/reports/${type}?${params}`);
+  }
+
+  async generateDealerReport(dealerId: string, reportType: string) {
+    return this.post(`/reports/generate`, { dealerId, reportType });
+  }
+}
+
+// IFRS Compliance Service
+export class IFRSService extends ApiService {
+  constructor() {
+    super('/ifrs');
+  }
+
+  // IFRS Dashboard
+  async getIFRSDashboard() {
+    return this.get('/dashboard');
+  }
+
+  // Revenue Recognition (IFRS 15)
+  async getRevenueRecognition() {
+    return this.get('/revenue-recognition');
+  }
+
+  async processRevenueRecognition(data: any) {
+    return this.post('/revenue-recognition', data);
+  }
+
+  // Expected Credit Loss (IFRS 9)
+  async getExpectedCreditLoss() {
+    return this.get('/expected-credit-loss');
+  }
+
+  async calculateECL(data: any) {
+    return this.post('/expected-credit-loss/calculate', data);
+  }
+
+  // Lease Accounting (IFRS 16)
+  async getLeaseAccounting() {
+    return this.get('/lease-accounting');
+  }
+
+  async processLeaseContract(leaseData: any) {
+    return this.post('/lease-accounting/contracts', leaseData);
+  }
+
+  // Asset Impairment
+  async getAssetImpairment() {
+    return this.get('/asset-impairment');
+  }
+
+  async performImpairmentTest(assetId: string) {
+    return this.post(`/asset-impairment/test/${assetId}`);
+  }
+
+  // IFRS Disclosures
+  async getDisclosures() {
+    return this.get('/disclosures');
+  }
+
+  async generateDisclosures(period: string) {
+    return this.post('/disclosures/generate', { period });
+  }
+
+  // IFRS Compliance Reporting
+  async getComplianceReport(period: string) {
+    return this.get(`/compliance/report?period=${period}`);
+  }
+
+  async submitComplianceReport(reportData: any) {
+    return this.post('/compliance/submit', reportData);
+  }
+
+  // IFRS Analytics
+  async getIFRSAnalytics() {
+    return this.get('/analytics');
+  }
+}
+
+// Fleet Management Service
+export class FleetService extends ApiService {
+  constructor() {
+    super('/fleet');
+  }
+
+  // Vehicle Management
+  async getVehicles() {
+    return this.get('/vehicles');
+  }
+
+  async getVehicle(id: string) {
+    return this.get(`/vehicles/${id}`);
+  }
+
+  async createVehicle(vehicle: any) {
+    return this.post('/vehicles', vehicle);
+  }
+
+  async updateVehicle(id: string, vehicle: any) {
+    return this.put(`/vehicles/${id}`, vehicle);
+  }
+
+  async deleteVehicle(id: string) {
+    return this.delete(`/vehicles/${id}`);
+  }
+
+  // Driver Management
+  async getDrivers() {
+    return this.get('/drivers');
+  }
+
+  async getDriver(id: string) {
+    return this.get(`/drivers/${id}`);
+  }
+
+  async createDriver(driver: any) {
+    return this.post('/drivers', driver);
+  }
+
+  async updateDriver(id: string, driver: any) {
+    return this.put(`/drivers/${id}`, driver);
+  }
+
+  async assignDriver(driverId: string, vehicleId: string) {
+    return this.post(`/drivers/${driverId}/assign`, { vehicleId });
+  }
+
+  async unassignDriver(driverId: string) {
+    return this.post(`/drivers/${driverId}/unassign`);
+  }
+
+  // GPS Tracking
+  async getVehicleLocation(vehicleId: string) {
+    return this.get(`/tracking/${vehicleId}`);
+  }
+
+  async getAllVehicleLocations() {
+    return this.get('/tracking/all');
+  }
+
+  async getVehicleRoute(vehicleId: string, startDate: string, endDate: string) {
+    return this.get(`/tracking/${vehicleId}/route?start=${startDate}&end=${endDate}`);
+  }
+
+  async getGeofenceAlerts() {
+    return this.get('/tracking/geofence-alerts');
+  }
+
+  // Maintenance Management
+  async getMaintenanceSchedules() {
+    return this.get('/maintenance/schedules');
+  }
+
+  async scheduleMaintenancePlan(plan: any) {
+    return this.post('/maintenance/schedules', plan);
+  }
+
+  async getMaintenanceHistory(vehicleId: string) {
+    return this.get(`/maintenance/history/${vehicleId}`);
+  }
+
+  async recordMaintenanceLog(log: any) {
+    return this.post('/maintenance/logs', log);
+  }
+
+  async getUpcomingMaintenance() {
+    return this.get('/maintenance/upcoming');
+  }
+
+  // Delivery Management
+  async getDeliveries(filters?: any) {
+    const params = new URLSearchParams(filters).toString();
+    return this.get(`/deliveries?${params}`);
+  }
+
+  async createDelivery(delivery: any) {
+    return this.post('/deliveries', delivery);
+  }
+
+  async updateDeliveryStatus(id: string, status: string) {
+    return this.patch(`/deliveries/${id}/status`, { status });
+  }
+
+  async optimizeRoute(deliveries: string[]) {
+    return this.post('/deliveries/optimize-route', { deliveries });
+  }
+
+  async getDeliveryReport(dateRange: { start: string; end: string }) {
+    return this.get(`/deliveries/reports?start=${dateRange.start}&end=${dateRange.end}`);
+  }
+
+  // Fleet Analytics
+  async getFleetMetrics() {
+    return this.get('/analytics/metrics');
+  }
+
+  async getFuelConsumption(period: string) {
+    return this.get(`/analytics/fuel-consumption?period=${period}`);
+  }
+
+  async getVehicleUtilization() {
+    return this.get('/analytics/utilization');
+  }
+
+  async getMaintenanceCosts(period: string) {
+    return this.get(`/analytics/maintenance-costs?period=${period}`);
+  }
+}
+
 // Export service instances
 export const authService = new AuthService();
 export const dashboardService = new DashboardService();
@@ -670,6 +1355,12 @@ export const complianceService = new ComplianceService();
 export const regulatoryService = new RegulatoryService();
 export const transactionService = new TransactionService();
 export const configurationService = new ConfigurationService();
+export const productService = new ProductService();
+export const analyticsService = new AnalyticsService();
+export const reportsService = new ReportsService();
+export const dealerService = new DealerService();
+export const ifrsService = new IFRSService();
+export const fleetService = new FleetService();
 export const wsService = new WebSocketService();
 
 // Export default API client

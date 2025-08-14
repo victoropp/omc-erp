@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "es2020",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": false,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
+    "noFallthroughCasesInSwitch": false,
+    "paths": {
+      "@/*": ["src/*"],
+      "@/services/*": ["src/services/*"],
+      "@/entities/*": ["src/entities/*"],
+      "@/dto/*": ["src/dto/*"],
+      "@/interfaces/*": ["src/interfaces/*"],
+      "@/enums/*": ["src/enums/*"],
+      "@/utils/*": ["src/utils/*"],
+      "@/engines/*": ["src/engines/*"],
+      "@/controllers/*": ["src/controllers/*"],
+      "@/modules/*": ["src/modules/*"],
+      "@/jobs/*": ["src/jobs/*"],
+      "@/validators/*": ["src/validators/*"],
+      "@/calculators/*": ["src/calculators/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

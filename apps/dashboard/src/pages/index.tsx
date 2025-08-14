@@ -22,4 +22,4 @@ export default function HomePage() {
 
   // Show loading screen while checking authentication
   return <LoadingScreen />;
-}
+} 

@@ -27,6 +27,9 @@ import { IntercompanyModule } from './intercompany/intercompany.module';
 // Background Jobs
 import { AccountingJobsModule } from './jobs/accounting-jobs.module';
 
+// Automated Posting System
+import { AutomatedPostingModule } from './automated-posting/automated-posting.module';
+
 // WebSocket for Real-time Updates
 import { AccountingGateway } from './gateways/accounting.gateway';
 
@@ -83,6 +86,9 @@ import { AccountingGateway } from './gateways/accounting.gateway';
     
     // Background Jobs
     AccountingJobsModule,
+    
+    // Automated Posting System
+    AutomatedPostingModule,
   ],
   providers: [AccountingGateway],
 })

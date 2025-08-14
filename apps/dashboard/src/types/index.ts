@@ -62,6 +62,12 @@ export interface ChartData {
     backgroundColor?: string | string[];
     borderColor?: string | string[];
     borderWidth?: number;
+    fill?: boolean;
+    tension?: number;
+    pointRadius?: number;
+    pointHoverRadius?: number;
+    borderDash?: number[];
+    [key: string]: any; // Allow additional Chart.js properties
   }[];
 }
 

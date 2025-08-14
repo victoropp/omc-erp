@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
-import { Sidebar } from './Sidebar';
-import { Header } from './Header';
+import { FuturisticSidebar } from './FuturisticSidebar';
+import { FuturisticHeader } from './FuturisticHeader';
 import { useAuthStore } from '@/stores/auth.store';
 import { Toaster } from 'react-hot-toast';
 
@@ -33,12 +33,12 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       />
       
       {/* Sidebar */}
-      <Sidebar />
+      <FuturisticSidebar isOpen={true} onClose={() => {}} />
       
       {/* Main content area */}
       <div className="lg:pl-72">
         {/* Header */}
-        <Header />
+        <FuturisticHeader onMenuClick={() => {}} />
         
         {/* Page content */}
         <main className="py-6">

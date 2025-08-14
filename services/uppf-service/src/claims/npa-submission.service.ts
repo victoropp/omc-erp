@@ -1,0 +1,118 @@
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { UPPFClaim } from './entities/uppf-claim.entity';
+import { PricingWindow } from './entities/pricing-window.entity';
+import { NPASubmission } from './entities/npa-submission.entity';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as XLSX from 'xlsx';
+import * as PDFDocument from 'pdfkit';
+
+export interface NPASubmissionRequest {
+  windowId: string;
+  claims: UPPFClaim[];
+  submissionType: 'UPPF_CLAIMS' | 'PRICE_SUBMISSION' | 'COMPLIANCE_REPORT';
+  submissionDeadline?: Date;
+}
+
+export interface NPASubmissionResult {
+  submissionId: string;
+  submissionReference: string;
+  submissionDate: Date;
+  totalClaims: number;
+  totalAmount: number;
+  documentsGenerated: NPADocument[];
+  validationResults: ValidationResult[];
+  submissionStatus: 'DRAFT' | 'SUBMITTED' | 'ACKNOWLEDGED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED';
+}
+
+export interface NPADocument {
+  documentType: 'SUMMARY_REPORT' | 'DETAILED_CLAIMS' | 'SUPPORTING_EVIDENCE' | 'COMPLIANCE_CERTIFICATE';
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  checksum: string;
+  generatedAt: Date;
+}
+
+export interface ValidationResult {
+  ruleId: string;
+  ruleName: string;
+  status: 'PASS' | 'FAIL' | 'WARNING';
+  message: string;
+  affectedClaims?: string[];
+}
+
+export interface NPASubmissionSchedule {
+  windowId: string;
+  submissionDeadline: Date;
+  reminderDates: Date[];
+  escalationDates: Date[];
+  autoSubmitEnabled: boolean;
+  batchSize: number;
+}
+
+@Injectable()
+export class NPASubmissionService {
+  private readonly logger = new Logger(NPASubmissionService.name);
+
+  constructor(
+    @InjectRepository(UPPFClaim)
+    private readonly claimRepository: Repository<UPPFClaim>,
+    @InjectRepository(PricingWindow)
+    private readonly pricingWindowRepository: Repository<PricingWindow>,
+    @InjectRepository(NPASubmission)
+    private readonly submissionRepository: Repository<NPASubmission>,
+    private readonly dataSource: DataSource,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
+
+  /**
+   * Submit batch of UPPF claims to NPA
+   */
+  async submitBatch(request: NPASubmissionRequest): Promise<NPASubmissionResult> {
+    this.logger.log(`Submitting batch of ${request.claims.length} claims for window ${request.windowId}`);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Validate submission eligibility
+      await this.validateSubmissionEligibility(request);
+
+      // Get pricing window details
+      const pricingWindow = await this.pricingWindowRepository.findOne({
+        where: { windowId: request.windowId },
+      });
+
+      if (!pricingWindow) {
+        throw new BadRequestException(`Pricing window ${request.windowId} not found`);
+      }
+
+      // Validate all claims meet NPA requirements
+      const validationResults = await this.validateClaimsForSubmission(request.claims);
+      const failedValidations = validationResults.filter(v => v.status === 'FAIL');
+
+      if (failedValidations.length > 0) {
+        throw new BadRequestException(
+          `Claims validation failed: ${failedValidations.map(v => v.message).join('; ')}`
+        );
+      }
+
+      // Generate submission reference
+      const submissionReference = this.generateSubmissionReference(request.windowId, request.submissionType);
+
+      // Create NPA submission record
+      const submission = queryRunner.manager.create(NPASubmission, {
+        submissionReference,
+        submissionType: request.submissionType,
+        windowId: request.windowId,
+        totalClaims: request.claims.length,
+        totalAmount: request.claims.reduce((sum, claim) => sum + claim.amountDue, 0),
+        submissionStatus: 'DRAFT',
+        submissionDate: new Date(),
+      });\n\n      const savedSubmission = await queryRunner.manager.save(submission);\n\n      // Generate NPA-compliant documents\n      const documents = await this.generateNPADocuments({\n        submission: savedSubmission,\n        claims: request.claims,\n        pricingWindow,\n        validationResults,\n      });\n\n      // Update submission with document references\n      savedSubmission.documentsGenerated = documents.length;\n      savedSubmission.submissionStatus = 'SUBMITTED';\n      await queryRunner.manager.save(savedSubmission);\n\n      // Update claim statuses\n      await this.updateClaimStatuses(queryRunner, request.claims, submissionReference);\n\n      // Submit to NPA API (if available)\n      const npaResponse = await this.submitToNPAAPI({\n        submissionReference,\n        documents,\n        claims: request.claims,\n      });\n\n      if (npaResponse.success) {\n        savedSubmission.npaAcknowledgmentRef = npaResponse.acknowledgmentRef;\n        savedSubmission.submissionStatus = 'ACKNOWLEDGED';\n        await queryRunner.manager.save(savedSubmission);\n      }\n\n      await queryRunner.commitTransaction();\n\n      // Generate final result\n      const result: NPASubmissionResult = {\n        submissionId: savedSubmission.id,\n        submissionReference,\n        submissionDate: savedSubmission.submissionDate,\n        totalClaims: request.claims.length,\n        totalAmount: savedSubmission.totalAmount,\n        documentsGenerated: documents,\n        validationResults,\n        submissionStatus: savedSubmission.submissionStatus,\n      };\n\n      // Emit submission event\n      this.eventEmitter.emit('npa-submission.completed', {\n        submissionId: savedSubmission.id,\n        submissionReference,\n        totalAmount: savedSubmission.totalAmount,\n        windowId: request.windowId,\n      });\n\n      this.logger.log(`NPA submission completed: ${submissionReference}`);\n      return result;\n\n    } catch (error) {\n      await queryRunner.rollbackTransaction();\n      this.logger.error(`NPA submission failed: ${error.message}`);\n      throw error;\n    } finally {\n      await queryRunner.release();\n    }\n  }\n\n  /**\n   * Generate automated submission schedule\n   */\n  async generateSubmissionSchedule(windowId: string): Promise<NPASubmissionSchedule> {\n    const pricingWindow = await this.pricingWindowRepository.findOne({\n      where: { windowId },\n    });\n\n    if (!pricingWindow) {\n      throw new BadRequestException(`Pricing window ${windowId} not found`);\n    }\n\n    const submissionDeadline = pricingWindow.submissionDeadline || \n      new Date(pricingWindow.endDate.getTime() + (7 * 24 * 60 * 60 * 1000)); // 7 days after window end\n\n    const reminderDates = [\n      new Date(submissionDeadline.getTime() - (7 * 24 * 60 * 60 * 1000)), // 7 days before\n      new Date(submissionDeadline.getTime() - (3 * 24 * 60 * 60 * 1000)), // 3 days before\n      new Date(submissionDeadline.getTime() - (1 * 24 * 60 * 60 * 1000)), // 1 day before\n    ];\n\n    const escalationDates = [\n      new Date(submissionDeadline.getTime() + (1 * 24 * 60 * 60 * 1000)), // 1 day after deadline\n      new Date(submissionDeadline.getTime() + (3 * 24 * 60 * 60 * 1000)), // 3 days after deadline\n    ];\n\n    return {\n      windowId,\n      submissionDeadline,\n      reminderDates,\n      escalationDates,\n      autoSubmitEnabled: true, // Can be configured\n      batchSize: 50, // Default batch size\n    };\n  }\n\n  /**\n   * Auto-submit ready claims on schedule\n   */\n  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)\n  async processScheduledSubmissions(): Promise<void> {\n    this.logger.log('Processing scheduled NPA submissions...');\n\n    try {\n      // Get active pricing windows approaching deadline\n      const approachingWindows = await this.getWindowsApproachingDeadline();\n\n      for (const window of approachingWindows) {\n        const readyClaims = await this.getReadyClaimsForWindow(window.windowId);\n        \n        if (readyClaims.length > 0) {\n          try {\n            await this.submitBatch({\n              windowId: window.windowId,\n              claims: readyClaims,\n              submissionType: 'UPPF_CLAIMS',\n            });\n\n            this.logger.log(`Auto-submitted ${readyClaims.length} claims for window ${window.windowId}`);\n          } catch (error) {\n            this.logger.error(`Auto-submission failed for window ${window.windowId}: ${error.message}`);\n            \n            // Send escalation alert\n            this.eventEmitter.emit('npa-submission.auto-submit-failed', {\n              windowId: window.windowId,\n              claimCount: readyClaims.length,\n              error: error.message,\n            });\n          }\n        }\n      }\n\n    } catch (error) {\n      this.logger.error(`Scheduled submission processing failed: ${error.message}`);\n    }\n  }\n\n  /**\n   * Track submission status and follow up\n   */\n  async trackSubmissionStatus(submissionReference: string): Promise<{\n    status: string;\n    lastUpdate: Date;\n    npaResponse?: any;\n    pendingActions: string[];\n  }> {\n    const submission = await this.submissionRepository.findOne({\n      where: { submissionReference },\n    });\n\n    if (!submission) {\n      throw new BadRequestException(`Submission ${submissionReference} not found`);\n    }\n\n    // Check with NPA API for status updates\n    const npaStatusCheck = await this.checkNPAStatus(submissionReference);\n\n    const pendingActions: string[] = [];\n    \n    switch (submission.submissionStatus) {\n      case 'SUBMITTED':\n        pendingActions.push('Awaiting NPA acknowledgment');\n        break;\n      case 'UNDER_REVIEW':\n        pendingActions.push('Under NPA review');\n        break;\n      case 'REJECTED':\n        pendingActions.push('Address NPA comments and resubmit');\n        break;\n    }\n\n    return {\n      status: submission.submissionStatus,\n      lastUpdate: submission.updatedAt || submission.submissionDate,\n      npaResponse: npaStatusCheck,\n      pendingActions,\n    };\n  }\n\n  // Private helper methods\n\n  private async validateSubmissionEligibility(request: NPASubmissionRequest): Promise<void> {\n    // Check if window is still open for submissions\n    const pricingWindow = await this.pricingWindowRepository.findOne({\n      where: { windowId: request.windowId },\n    });\n\n    if (!pricingWindow) {\n      throw new BadRequestException(`Pricing window ${request.windowId} not found`);\n    }\n\n    if (pricingWindow.status === 'CLOSED') {\n      throw new BadRequestException(`Pricing window ${request.windowId} is closed for submissions`);\n    }\n\n    // Check if claims are in valid status\n    const invalidClaims = request.claims.filter(\n      claim => !['READY_TO_SUBMIT', 'DRAFT'].includes(claim.status)\n    );\n\n    if (invalidClaims.length > 0) {\n      throw new BadRequestException(\n        `${invalidClaims.length} claims are not in valid status for submission`\n      );\n    }\n  }\n\n  private async validateClaimsForSubmission(claims: UPPFClaim[]): Promise<ValidationResult[]> {\n    const validationResults: ValidationResult[] = [];\n\n    // Rule 1: All claims must have supporting evidence\n    const claimsWithoutEvidence = claims.filter(claim => \n      !claim.evidenceLinks || claim.evidenceLinks.length === 0\n    );\n    \n    validationResults.push({\n      ruleId: 'NPA001',\n      ruleName: 'Supporting Evidence Required',\n      status: claimsWithoutEvidence.length > 0 ? 'FAIL' : 'PASS',\n      message: claimsWithoutEvidence.length > 0 \n        ? `${claimsWithoutEvidence.length} claims missing supporting evidence`\n        : 'All claims have supporting evidence',\n      affectedClaims: claimsWithoutEvidence.map(c => c.claimId),\n    });\n\n    // Rule 2: All claims must be three-way reconciled\n    const unreconciled = claims.filter(claim => !claim.threeWayReconciled);\n    \n    validationResults.push({\n      ruleId: 'NPA002',\n      ruleName: 'Three-Way Reconciliation Required',\n      status: unreconciled.length > 0 ? 'FAIL' : 'PASS',\n      message: unreconciled.length > 0 \n        ? `${unreconciled.length} claims not three-way reconciled`\n        : 'All claims are three-way reconciled',\n      affectedClaims: unreconciled.map(c => c.claimId),\n    });\n\n    // Rule 3: Claims must be within reasonable amount ranges\n    const highValueClaims = claims.filter(claim => claim.amountDue > 50000); // GHS 50,000 threshold\n    \n    validationResults.push({\n      ruleId: 'NPA003',\n      ruleName: 'High Value Claim Review',\n      status: highValueClaims.length > 0 ? 'WARNING' : 'PASS',\n      message: highValueClaims.length > 0 \n        ? `${highValueClaims.length} high-value claims require additional review`\n        : 'All claims within normal value ranges',\n      affectedClaims: highValueClaims.map(c => c.claimId),\n    });\n\n    // Rule 4: Claims must have valid route and distance data\n    const invalidDistance = claims.filter(claim => claim.kmBeyondEqualisation <= 0);\n    \n    validationResults.push({\n      ruleId: 'NPA004',\n      ruleName: 'Valid Distance Beyond Equalisation',\n      status: invalidDistance.length > 0 ? 'FAIL' : 'PASS',\n      message: invalidDistance.length > 0 \n        ? `${invalidDistance.length} claims have invalid distance data`\n        : 'All claims have valid distance data',\n      affectedClaims: invalidDistance.map(c => c.claimId),\n    });\n\n    return validationResults;\n  }\n\n  private generateSubmissionReference(windowId: string, submissionType: string): string {\n    const timestamp = Date.now().toString().slice(-8);\n    const typeCode = submissionType.substring(0, 3).toUpperCase();\n    return `${typeCode}-${windowId}-${timestamp}`;\n  }\n\n  private async generateNPADocuments(data: {\n    submission: NPASubmission;\n    claims: UPPFClaim[];\n    pricingWindow: PricingWindow;\n    validationResults: ValidationResult[];\n  }): Promise<NPADocument[]> {\n    const documents: NPADocument[] = [];\n    const outputDir = path.join(process.cwd(), 'uploads', 'npa-submissions', data.submission.submissionReference);\n    \n    // Ensure output directory exists\n    await fs.promises.mkdir(outputDir, { recursive: true });\n\n    // 1. Generate Summary Report (PDF)\n    const summaryDoc = await this.generateSummaryReport(data, outputDir);\n    documents.push(summaryDoc);\n\n    // 2. Generate Detailed Claims (Excel)\n    const detailedDoc = await this.generateDetailedClaimsExcel(data, outputDir);\n    documents.push(detailedDoc);\n\n    // 3. Generate Compliance Certificate (PDF)\n    const complianceDoc = await this.generateComplianceCertificate(data, outputDir);\n    documents.push(complianceDoc);\n\n    // 4. Package supporting evidence\n    const evidenceDoc = await this.packageSupportingEvidence(data, outputDir);\n    documents.push(evidenceDoc);\n\n    return documents;\n  }\n\n  private async generateSummaryReport(data: any, outputDir: string): Promise<NPADocument> {\n    const fileName = `UPPF_Summary_${data.submission.submissionReference}.pdf`;\n    const filePath = path.join(outputDir, fileName);\n\n    const doc = new PDFDocument();\n    doc.pipe(fs.createWriteStream(filePath));\n\n    // Header\n    doc.fontSize(20).text('UPPF Claims Submission Summary', { align: 'center' });\n    doc.moveDown();\n\n    // Submission details\n    doc.fontSize(12);\n    doc.text(`Submission Reference: ${data.submission.submissionReference}`);\n    doc.text(`Pricing Window: ${data.pricingWindow.windowId}`);\n    doc.text(`Submission Date: ${data.submission.submissionDate.toDateString()}`);\n    doc.text(`Total Claims: ${data.claims.length}`);\n    doc.text(`Total Amount: GHS ${data.submission.totalAmount.toFixed(2)}`);\n    doc.moveDown();\n\n    // Claims breakdown\n    doc.text('Claims Breakdown:', { underline: true });\n    data.claims.forEach((claim, index) => {\n      doc.text(`${index + 1}. Claim ${claim.claimId}: GHS ${claim.amountDue.toFixed(2)}`);\n    });\n\n    doc.end();\n\n    const stats = await fs.promises.stat(filePath);\n    const checksum = await this.calculateFileChecksum(filePath);\n\n    return {\n      documentType: 'SUMMARY_REPORT',\n      fileName,\n      filePath,\n      fileSize: stats.size,\n      checksum,\n      generatedAt: new Date(),\n    };\n  }\n\n  private async generateDetailedClaimsExcel(data: any, outputDir: string): Promise<NPADocument> {\n    const fileName = `UPPF_Claims_${data.submission.submissionReference}.xlsx`;\n    const filePath = path.join(outputDir, fileName);\n\n    const workbook = XLSX.utils.book_new();\n    \n    // Claims data\n    const claimsData = data.claims.map(claim => ({\n      'Claim ID': claim.claimId,\n      'Window ID': claim.windowId,\n      'Route ID': claim.routeId,\n      'Km Beyond Equalisation': claim.kmBeyondEqualisation,\n      'Litres Moved': claim.litresMoved,\n      'Tariff Per Litre-Km': claim.tariffPerLitreKm,\n      'Amount Due': claim.amountDue,\n      'Status': claim.status,\n      'Three-Way Reconciled': claim.threeWayReconciled ? 'Yes' : 'No',\n      'Created At': claim.createdAt.toISOString(),\n    }));\n\n    const worksheet = XLSX.utils.json_to_sheet(claimsData);\n    XLSX.utils.book_append_sheet(workbook, worksheet, 'UPPF Claims');\n    \n    // Validation results sheet\n    const validationData = data.validationResults.map(result => ({\n      'Rule ID': result.ruleId,\n      'Rule Name': result.ruleName,\n      'Status': result.status,\n      'Message': result.message,\n      'Affected Claims': result.affectedClaims?.join(', ') || 'None',\n    }));\n    \n    const validationSheet = XLSX.utils.json_to_sheet(validationData);\n    XLSX.utils.book_append_sheet(workbook, validationSheet, 'Validation Results');\n\n    XLSX.writeFile(workbook, filePath);\n\n    const stats = await fs.promises.stat(filePath);\n    const checksum = await this.calculateFileChecksum(filePath);\n\n    return {\n      documentType: 'DETAILED_CLAIMS',\n      fileName,\n      filePath,\n      fileSize: stats.size,\n      checksum,\n      generatedAt: new Date(),\n    };\n  }\n\n  private async generateComplianceCertificate(data: any, outputDir: string): Promise<NPADocument> {\n    const fileName = `Compliance_Certificate_${data.submission.submissionReference}.pdf`;\n    const filePath = path.join(outputDir, fileName);\n\n    const doc = new PDFDocument();\n    doc.pipe(fs.createWriteStream(filePath));\n\n    // Certificate content\n    doc.fontSize(16).text('UPPF COMPLIANCE CERTIFICATE', { align: 'center' });\n    doc.moveDown();\n    \n    doc.fontSize(12);\n    doc.text('This is to certify that all claims in this submission have been:', { align: 'center' });\n    doc.moveDown();\n    \n    doc.text('✓ Three-way reconciled between depot, transporter, and station records');\n    doc.text('✓ GPS validated for route compliance and mileage accuracy');\n    doc.text('✓ Temperature corrected for volume calculations');\n    doc.text('✓ Reviewed for compliance with NPA regulations');\n    doc.moveDown();\n    \n    doc.text(`Submission Reference: ${data.submission.submissionReference}`);\n    doc.text(`Date of Certification: ${new Date().toDateString()}`);\n    doc.text('Authorized by: OMC ERP System');\n\n    doc.end();\n\n    const stats = await fs.promises.stat(filePath);\n    const checksum = await this.calculateFileChecksum(filePath);\n\n    return {\n      documentType: 'COMPLIANCE_CERTIFICATE',\n      fileName,\n      filePath,\n      fileSize: stats.size,\n      checksum,\n      generatedAt: new Date(),\n    };\n  }\n\n  private async packageSupportingEvidence(data: any, outputDir: string): Promise<NPADocument> {\n    const fileName = `Supporting_Evidence_${data.submission.submissionReference}.zip`;\n    const filePath = path.join(outputDir, fileName);\n\n    // TODO: Implement ZIP packaging of all supporting evidence files\n    // This would include GPS traces, reconciliation reports, etc.\n    \n    // For now, create a placeholder file\n    await fs.promises.writeFile(filePath, 'Supporting evidence package');\n\n    const stats = await fs.promises.stat(filePath);\n    const checksum = await this.calculateFileChecksum(filePath);\n\n    return {\n      documentType: 'SUPPORTING_EVIDENCE',\n      fileName,\n      filePath,\n      fileSize: stats.size,\n      checksum,\n      generatedAt: new Date(),\n    };\n  }\n\n  private async updateClaimStatuses(\n    queryRunner: any,\n    claims: UPPFClaim[],\n    submissionReference: string\n  ): Promise<void> {\n    for (const claim of claims) {\n      await queryRunner.manager.update(UPPFClaim, claim.id, {\n        status: 'SUBMITTED',\n        submittedAt: new Date(),\n        submissionReference,\n      });\n    }\n  }\n\n  private async submitToNPAAPI(data: {\n    submissionReference: string;\n    documents: NPADocument[];\n    claims: UPPFClaim[];\n  }): Promise<{ success: boolean; acknowledgmentRef?: string; error?: string }> {\n    // TODO: Implement actual NPA API integration\n    // This would submit the documents to the NPA's electronic submission system\n    \n    this.logger.log(`Submitting to NPA API: ${data.submissionReference}`);\n    \n    // Mock successful submission\n    return {\n      success: true,\n      acknowledgmentRef: `NPA-ACK-${Date.now()}`,\n    };\n  }\n\n  private async getWindowsApproachingDeadline(): Promise<PricingWindow[]> {\n    const tomorrow = new Date();\n    tomorrow.setDate(tomorrow.getDate() + 1);\n    \n    return this.pricingWindowRepository.find({\n      where: {\n        submissionDeadline: { $lte: tomorrow } as any,\n        status: 'ACTIVE',\n      },\n    });\n  }\n\n  private async getReadyClaimsForWindow(windowId: string): Promise<UPPFClaim[]> {\n    return this.claimRepository.find({\n      where: {\n        windowId,\n        status: 'READY_TO_SUBMIT',\n      },\n      take: 50, // Batch size\n    });\n  }\n\n  private async checkNPAStatus(submissionReference: string): Promise<any> {\n    // TODO: Implement NPA status checking API\n    return {\n      status: 'UNDER_REVIEW',\n      lastChecked: new Date(),\n      estimatedResponseDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),\n    };\n  }\n\n  private async calculateFileChecksum(filePath: string): Promise<string> {\n    const crypto = require('crypto');\n    const fileBuffer = await fs.promises.readFile(filePath);\n    return crypto.createHash('md5').update(fileBuffer).digest('hex');\n  }\n}"

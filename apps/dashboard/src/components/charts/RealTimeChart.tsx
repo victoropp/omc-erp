@@ -1,0 +1,283 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { motion } from 'framer-motion';
+import { LineChart, BarChart, DoughnutChart } from './index';
+import { dashboardService, wsService } from '@/services/api';
+import { ChartData } from '@/types';
+import { Card, Button } from '@/components/ui';
+import { useTheme } from '@/contexts/ThemeContext';
+
+interface RealTimeChartProps {
+  chartType: 'line' | 'bar' | 'pie';
+  title: string;
+  endpoint: string;
+  refreshInterval?: number;
+  height?: number;
+  showRefreshButton?: boolean;
+  enableWebSocket?: boolean;
+}
+
+export function RealTimeChart({
+  chartType,
+  title,
+  endpoint,
+  refreshInterval = 30000, // 30 seconds default
+  height = 300,
+  showRefreshButton = true,
+  enableWebSocket = false,
+}: RealTimeChartProps) {
+  const { actualTheme } = useTheme();
+  const [data, setData] = useState<ChartData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Try to fetch real data first
+      let response;
+      if (endpoint === 'revenue') {
+        response = await dashboardService.getRealTimeMetrics();
+      } else if (endpoint === 'transactions') {
+        response = await dashboardService.getOperationalDashboard();
+      } else {
+        // Fallback to mock data
+        response = generateMockChartData(endpoint);
+      }
+      
+      setData(response as ChartData);
+      setLastUpdate(new Date());
+    } catch (err) {
+      console.error('Failed to fetch chart data:', err);
+      setError('Failed to load data');
+      // Use mock data as fallback
+      setData(generateMockChartData(endpoint));
+      setLastUpdate(new Date());
+    } finally {
+      setLoading(false);
+    }
+  }, [endpoint]);
+
+  // Initial data load
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Set up polling for real-time updates
+  useEffect(() => {
+    if (!enableWebSocket && refreshInterval > 0) {
+      const interval = setInterval(fetchData, refreshInterval);
+      return () => clearInterval(interval);
+    }
+  }, [fetchData, refreshInterval, enableWebSocket]);
+
+  // WebSocket connection for real-time updates
+  useEffect(() => {
+    if (enableWebSocket) {
+      wsService.connect();
+      return () => wsService.disconnect();
+    }
+  }, [enableWebSocket]);
+
+  const generateMockChartData = (type: string): ChartData => {
+    const now = new Date();
+    const labels = Array.from({ length: 12 }, (_, i) => {
+      const month = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
+      return month.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+    });
+
+    switch (type) {
+      case 'revenue':
+        return {
+          labels,
+          datasets: [{
+            label: 'Revenue (GHS)',
+            data: Array.from({ length: 12 }, () => Math.floor(Math.random() * 2000000) + 2000000),
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            borderColor: 'rgba(59, 130, 246, 1)',
+            borderWidth: 3,
+            fill: true,
+          }],
+        };
+      
+      case 'sales':
+        return {
+          labels: ['PMS', 'AGO', 'LPG', 'KERO', 'IFO'],
+          datasets: [{
+            label: 'Sales Volume (%)',
+            data: [45, 30, 15, 8, 2],
+            backgroundColor: [
+              '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'
+            ],
+          }],
+        };
+      
+      case 'transactions':
+        return {
+          labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+          datasets: [{
+            label: 'Daily Transactions',
+            data: Array.from({ length: 7 }, () => Math.floor(Math.random() * 5000) + 1000),
+            backgroundColor: 'rgba(16, 185, 129, 0.8)',
+            borderColor: 'rgba(16, 185, 129, 1)',
+            borderWidth: 2,
+          }],
+        };
+      
+      default:
+        return {
+          labels: ['Data'],
+          datasets: [{
+            label: 'No Data',
+            data: [0],
+            backgroundColor: 'rgba(107, 114, 128, 0.5)',
+          }],
+        };
+    }
+  };
+
+  const renderChart = () => {
+    if (!data) return null;
+
+    const chartProps = {
+      data,
+      height,
+      animate: true,
+      showLegend: chartType !== 'line',
+    };
+
+    switch (chartType) {
+      case 'line':
+        return <LineChart {...chartProps} fill={true} />;
+      case 'bar':
+        return <BarChart {...chartProps} />;
+      case 'pie':
+        return <DoughnutChart {...chartProps} />;
+      default:
+        return <LineChart {...chartProps} />;
+    }
+  };
+
+  return (
+    <Card className="relative">
+      <div className="p-6">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-white">{title}</h3>
+          <div className="flex items-center space-x-2">
+            {/* Live indicator */}
+            {!loading && !error && (
+              <div className="flex items-center space-x-1">
+                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                <span className="text-xs text-green-400">Live</span>
+              </div>
+            )}
+            
+            {/* Last update time */}
+            {lastUpdate && (
+              <span className="text-xs text-dark-400">
+                {lastUpdate.toLocaleTimeString()}
+              </span>
+            )}
+            
+            {/* Refresh button */}
+            {showRefreshButton && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={fetchData}
+                disabled={loading}
+              >
+                <motion.svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  animate={loading ? { rotate: 360 } : {}}
+                  transition={loading ? { duration: 1, repeat: Infinity, ease: 'linear' } : {}}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </motion.svg>
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Chart content */}
+        <div className="relative">
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-dark-900/50 backdrop-blur-sm rounded-lg z-10">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                className="w-8 h-8"
+              >
+                <svg className="w-full h-full text-primary-500" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="m4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+              </motion.div>
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-center justify-center h-64">
+              <div className="text-center">
+                <svg className="w-12 h-12 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.268 18.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <p className="text-red-400 text-sm">{error}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={fetchData}
+                  className="mt-2"
+                >
+                  Retry
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {!loading && !error && data && renderChart()}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// Specialized real-time chart components
+export function RealTimeRevenueChart(props: Omit<RealTimeChartProps, 'chartType' | 'endpoint'>) {
+  return (
+    <RealTimeChart
+      {...props}
+      chartType="line"
+      endpoint="revenue"
+      title="Live Revenue Tracking"
+    />
+  );
+}
+
+export function RealTimeSalesChart(props: Omit<RealTimeChartProps, 'chartType' | 'endpoint'>) {
+  return (
+    <RealTimeChart
+      {...props}
+      chartType="pie"
+      endpoint="sales"
+      title="Fuel Sales Distribution"
+    />
+  );
+}
+
+export function RealTimeTransactionChart(props: Omit<RealTimeChartProps, 'chartType' | 'endpoint'>) {
+  return (
+    <RealTimeChart
+      {...props}
+      chartType="bar"
+      endpoint="transactions"
+      title="Daily Transaction Volume"
+    />
+  );
+}

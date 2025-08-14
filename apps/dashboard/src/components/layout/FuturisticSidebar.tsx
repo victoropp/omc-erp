@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -6,6 +6,9 @@ import { useAuthStore } from '@/stores/auth.store';
 import { UserRole } from '@/types/shared';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { useTheme } from '@/contexts/ThemeContext';
+import { NavigationIcons } from '@/components/ui/NavigationIcons';
+import { NavigationSearch } from '@/components/ui/NavigationSearch';
+import { Tooltip } from '@/components/ui/Tooltip';
 
 interface NavigationItem {
   name: string;
@@ -21,134 +24,291 @@ interface FuturisticSidebarProps {
   onClose: () => void;
 }
 
-// Navigation icons as React components
-const DashboardIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z" />
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5a2 2 0 012-2h4a2 2 0 012 2v2H8V5z" />
-  </svg>
-);
-
-const StationsIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-  </svg>
-);
-
-const TransactionsIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-  </svg>
-);
-
-const PricingIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-  </svg>
-);
-
-const UppfIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-  </svg>
-);
-
-const CustomersIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-  </svg>
-);
-
-const InventoryIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-  </svg>
-);
-
-const ReportsIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-  </svg>
-);
-
-const SettingsIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-  </svg>
-);
 
 export function FuturisticSidebar({ isOpen, onClose }: FuturisticSidebarProps) {
   const router = useRouter();
   const { user, logout } = useAuthStore();
   const { actualTheme } = useTheme();
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + K to open search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setIsSearchOpen(true);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const navigation: NavigationItem[] = [
+    // EXECUTIVE OVERVIEW
     {
-      name: 'Dashboard',
+      name: 'Dashboard Overview',
       href: '/dashboard',
-      icon: DashboardIcon,
-    },
-    {
-      name: 'Stations',
-      href: '/stations',
-      icon: StationsIcon,
-      badge: '12',
-    },
-    {
-      name: 'Transactions',
-      href: '/transactions',
-      icon: TransactionsIcon,
-      badge: 'Live',
-    },
-    {
-      name: 'Pricing & UPPF',
-      href: '/pricing',
-      icon: PricingIcon,
+      icon: NavigationIcons.Dashboard,
       children: [
-        { name: 'Price Windows', href: '/pricing/windows', icon: PricingIcon },
-        { name: 'PBU Components', href: '/pricing/components', icon: PricingIcon },
-        { name: 'UPPF Claims', href: '/pricing/uppf-claims', icon: UppfIcon, badge: '3' },
-        { name: 'Dealer Settlements', href: '/pricing/settlements', icon: TransactionsIcon },
+        { name: 'Executive Dashboard', href: '/dashboard/executive', icon: NavigationIcons.Analytics },
+        { name: 'Operational Dashboard', href: '/dashboard/operational', icon: NavigationIcons.Management },
+        { name: 'Integrated Dashboard', href: '/dashboard/integrated', icon: NavigationIcons.Analytics },
+        { name: 'Dashboard Stats', href: '/dashboard/dashboard-stats', icon: NavigationIcons.Performance },
+      ],
+    },
+
+    // CORE BUSINESS OPERATIONS
+    {
+      name: 'UPPF Management',
+      href: '/uppf',
+      icon: NavigationIcons.UPPF,
+      badge: 'Live',
+      children: [
+        { name: 'UPPF Dashboard', href: '/uppf/dashboard', icon: NavigationIcons.Dashboard },
+        { name: 'Claims Management', href: '/uppf/claims', icon: NavigationIcons.Claims, badge: '3' },
+        { name: 'Create Claim', href: '/uppf/claims/create', icon: NavigationIcons.Claims },
+        { name: 'GPS Tracking', href: '/uppf/gps-tracking', icon: NavigationIcons.GPS },
+        { name: 'Route Management', href: '/uppf/routes', icon: NavigationIcons.Routes },
+        { name: 'Reconciliation', href: '/uppf/reconciliation', icon: NavigationIcons.Reconciliation },
+        { name: 'Settlements', href: '/uppf/settlements', icon: NavigationIcons.Settlements },
+        { name: 'Analytics', href: '/uppf/analytics', icon: NavigationIcons.Analytics },
+        { name: 'Automation', href: '/uppf/automation', icon: NavigationIcons.Automation },
+        { name: 'NPA Submission', href: '/uppf/npa-submission', icon: NavigationIcons.Reports },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.ACCOUNTANT],
+    },
+    {
+      name: 'Pricing Management',
+      href: '/pricing',
+      icon: NavigationIcons.Pricing,
+      children: [
+        { name: 'Pricing Dashboard', href: '/pricing/dashboard', icon: NavigationIcons.Dashboard },
+        { name: 'Price Build-Up', href: '/pricing/build-up', icon: NavigationIcons.Calculator },
+        { name: 'Pricing Windows', href: '/pricing/windows', icon: NavigationIcons.Windows },
+        { name: 'Price Calculator', href: '/pricing/calculator', icon: NavigationIcons.Calculator },
+        { name: 'PBU Components', href: '/pricing/components', icon: NavigationIcons.Components },
+        { name: 'Analytics', href: '/pricing/analytics', icon: NavigationIcons.Analytics },
+        { name: 'Reports', href: '/pricing/reports', icon: NavigationIcons.Reports },
+        { name: 'Automation', href: '/pricing/automation', icon: NavigationIcons.Automation },
+        { name: 'NPA Integration', href: '/pricing/npa-integration', icon: NavigationIcons.Management },
+        { name: 'Variance Analysis', href: '/pricing/variance', icon: NavigationIcons.Analytics },
+        { name: 'Settlements', href: '/pricing/settlements', icon: NavigationIcons.Settlements },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.ACCOUNTANT],
+    },
+
+    // PARTNER & RELATIONSHIP MANAGEMENT
+    {
+      name: 'Dealer Management',
+      href: '/dealers',
+      icon: NavigationIcons.Dealers,
+      badge: '15',
+      children: [
+        { name: 'Dealer Dashboard', href: '/dealers/dashboard', icon: NavigationIcons.Dashboard },
+        { name: 'Dealer Onboarding', href: '/dealers/onboarding', icon: NavigationIcons.Onboarding },
+        { name: 'Performance Tracking', href: '/dealers/performance', icon: NavigationIcons.Performance },
+        { name: 'Loan Management', href: '/dealers/loans', icon: NavigationIcons.Loans },
+        { name: 'Credit Assessment', href: '/dealers/credit', icon: NavigationIcons.Credit },
+        { name: 'Settlements', href: '/dealers/settlements', icon: NavigationIcons.Settlements },
+        { name: 'Compliance Monitoring', href: '/dealers/compliance', icon: NavigationIcons.Compliance },
+        { name: 'Analytics', href: '/dealers/analytics', icon: NavigationIcons.Analytics },
+        { name: 'Management', href: '/dealers/management', icon: NavigationIcons.Management },
+        { name: 'Reports', href: '/dealers/reports', icon: NavigationIcons.Reports },
       ],
       roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.ACCOUNTANT],
     },
     {
       name: 'Customers',
       href: '/customers',
-      icon: CustomersIcon,
+      icon: NavigationIcons.Customers,
+    },
+
+    // SUPPLY CHAIN & PROCUREMENT
+    {
+      name: 'Procurement',
+      href: '/procurement',
+      icon: NavigationIcons.Procurement,
+      children: [
+        { name: 'Purchase Orders', href: '/procurement/purchase-orders', icon: NavigationIcons.PurchaseOrders },
+        { name: 'Create Purchase Order', href: '/procurement/create-po', icon: NavigationIcons.PurchaseOrders },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN],
     },
     {
-      name: 'Inventory',
+      name: 'Suppliers',
+      href: '/suppliers',
+      icon: NavigationIcons.Suppliers,
+      children: [
+        { name: 'Supplier List', href: '/suppliers', icon: NavigationIcons.Suppliers },
+        { name: 'Create Supplier', href: '/suppliers/create', icon: NavigationIcons.Suppliers },
+        { name: 'Supplier Contracts', href: '/suppliers/contracts', icon: NavigationIcons.Management },
+        { name: 'Performance Tracking', href: '/suppliers/performance', icon: NavigationIcons.Performance },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN],
+    },
+
+    // INVENTORY & OPERATIONS
+    {
+      name: 'Products & Catalog',
+      href: '/products',
+      icon: NavigationIcons.Products,
+      children: [
+        { name: 'Product List', href: '/products', icon: NavigationIcons.Products },
+        { name: 'Create Product', href: '/products/create', icon: NavigationIcons.Products },
+        { name: 'Product Categories', href: '/products/categories', icon: NavigationIcons.Categories },
+        { name: 'Pricing Rules', href: '/products/pricing-rules', icon: NavigationIcons.Pricing },
+      ],
+    },
+    {
+      name: 'Inventory Management',
       href: '/inventory',
-      icon: InventoryIcon,
+      icon: NavigationIcons.Inventory,
       badge: '!',
     },
     {
+      name: 'Stations & Locations',
+      href: '/stations',
+      icon: NavigationIcons.Stations,
+      badge: '12',
+      children: [
+        { name: 'Station Overview', href: '/stations', icon: NavigationIcons.Stations },
+        { name: 'Station Management', href: '/stations/management', icon: NavigationIcons.Management },
+      ],
+    },
+    {
+      name: 'Transactions',
+      href: '/transactions',
+      icon: NavigationIcons.Transactions,
+      badge: 'Live',
+    },
+
+    // FLEET & LOGISTICS
+    {
+      name: 'Fleet Management',
+      href: '/fleet',
+      icon: NavigationIcons.Fleet,
+      children: [
+        { name: 'Fleet Overview', href: '/fleet', icon: NavigationIcons.Fleet },
+        { name: 'Vehicles', href: '/fleet/vehicles', icon: NavigationIcons.Vehicles },
+        { name: 'Drivers', href: '/fleet/drivers', icon: NavigationIcons.Employees },
+        { name: 'Maintenance', href: '/fleet/maintenance', icon: NavigationIcons.Maintenance },
+        { name: 'GPS Tracking', href: '/fleet/gps-tracking', icon: NavigationIcons.GPS },
+        { name: 'Deliveries', href: '/fleet/deliveries', icon: NavigationIcons.Management },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN],
+    },
+
+    // FINANCIAL MANAGEMENT
+    {
+      name: 'Financial Management',
+      href: '/financial',
+      icon: NavigationIcons.Financial,
+      children: [
+        { name: 'Chart of Accounts', href: '/financial/chart-of-accounts', icon: NavigationIcons.Management },
+        { name: 'General Ledger', href: '/financial/general-ledger', icon: NavigationIcons.GeneralLedger },
+        { name: 'Journal Entries', href: '/financial/journal-entries', icon: NavigationIcons.JournalEntries },
+        { name: 'Trial Balance', href: '/financial/trial-balance', icon: NavigationIcons.Analytics },
+        { name: 'Accounts Payable', href: '/financial/accounts-payable', icon: NavigationIcons.Financial },
+        { name: 'Accounts Receivable', href: '/financial/accounts-receivable', icon: NavigationIcons.Financial },
+        { name: 'Bank Reconciliation', href: '/financial/bank-reconciliation', icon: NavigationIcons.Reconciliation },
+        { name: 'Financial Statements', href: '/financial/financial-statements', icon: NavigationIcons.Reports },
+        { name: 'Cost Centers', href: '/financial/cost-centers', icon: NavigationIcons.Management },
+        { name: 'Budget Management', href: '/financial/budget-management', icon: NavigationIcons.Management },
+        { name: 'Tax Management', href: '/financial/tax-management', icon: NavigationIcons.Management },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.ACCOUNTANT],
+    },
+    {
+      name: 'IFRS Compliance',
+      href: '/ifrs',
+      icon: NavigationIcons.IFRS,
+      children: [
+        { name: 'IFRS Dashboard', href: '/ifrs/dashboard', icon: NavigationIcons.Dashboard },
+        { name: 'Revenue Recognition', href: '/ifrs/revenue-recognition', icon: NavigationIcons.RevenueRecognition },
+        { name: 'Expected Credit Loss', href: '/ifrs/expected-credit-loss', icon: NavigationIcons.Credit },
+        { name: 'Lease Accounting', href: '/ifrs/lease-accounting', icon: NavigationIcons.Management },
+        { name: 'Asset Impairment', href: '/ifrs/asset-impairment', icon: NavigationIcons.Analytics },
+        { name: 'Compliance', href: '/ifrs/compliance', icon: NavigationIcons.Compliance },
+        { name: 'Disclosures', href: '/ifrs/disclosures', icon: NavigationIcons.Reports },
+        { name: 'Reporting', href: '/ifrs/reporting', icon: NavigationIcons.Reports },
+        { name: 'Analytics', href: '/ifrs/analytics', icon: NavigationIcons.Analytics },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.ACCOUNTANT],
+    },
+
+    // HUMAN RESOURCES
+    {
+      name: 'Human Resources',
+      href: '/hr',
+      icon: NavigationIcons.HumanResources,
+      children: [
+        { name: 'HR Overview', href: '/hr', icon: NavigationIcons.HumanResources },
+        { name: 'Employees', href: '/hr/employees', icon: NavigationIcons.Employees },
+        { name: 'Payroll', href: '/hr/payroll', icon: NavigationIcons.Payroll },
+        { name: 'Leave Management', href: '/hr/leave-management', icon: NavigationIcons.Management },
+        { name: 'Performance Management', href: '/hr/performance', icon: NavigationIcons.Performance },
+        { name: 'Training & Development', href: '/hr/training', icon: NavigationIcons.Management },
+        { name: 'Recruitment', href: '/hr/recruitment', icon: NavigationIcons.Management },
+      ],
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN],
+    },
+
+    // ANALYTICS & INSIGHTS
+    {
+      name: 'Analytics & Insights',
+      href: '/analytics',
+      icon: NavigationIcons.Analytics,
+      children: [
+        { name: 'Analytics Overview', href: '/analytics', icon: NavigationIcons.Analytics },
+        { name: 'AI Insights', href: '/analytics/ai-insights', icon: NavigationIcons.Analytics },
+        { name: 'Financial Analytics', href: '/analytics/financial', icon: NavigationIcons.Financial },
+        { name: 'Operational Analytics', href: '/analytics/operational', icon: NavigationIcons.Management },
+        { name: 'Sales Analytics', href: '/analytics/sales', icon: NavigationIcons.Analytics },
+        { name: 'Inventory Analytics', href: '/analytics/inventory', icon: NavigationIcons.Inventory },
+      ],
+    },
+
+    // REPORTING
+    {
       name: 'Reports',
       href: '/reports',
-      icon: ReportsIcon,
+      icon: NavigationIcons.Reports,
       children: [
-        { name: 'Sales Reports', href: '/reports/sales', icon: ReportsIcon },
-        { name: 'Inventory Reports', href: '/reports/inventory', icon: InventoryIcon },
-        { name: 'Financial Reports', href: '/reports/financial', icon: TransactionsIcon },
-        { name: 'Regulatory Reports', href: '/reports/regulatory', icon: SettingsIcon },
+        { name: 'Reports Overview', href: '/reports', icon: NavigationIcons.Reports },
+        { name: 'Sales Reports', href: '/reports/sales', icon: NavigationIcons.Reports },
+        { name: 'Inventory Reports', href: '/reports/inventory', icon: NavigationIcons.Inventory },
+        { name: 'Financial Reports', href: '/reports/financial', icon: NavigationIcons.Financial },
+        { name: 'Regulatory Reports', href: '/reports/regulatory', icon: NavigationIcons.Compliance },
+      ],
+    },
+
+    // ADMINISTRATION
+    {
+      name: 'Administration',
+      href: '/admin',
+      icon: NavigationIcons.Admin,
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN],
+      children: [
+        { name: 'System Configuration', href: '/admin/configuration', icon: NavigationIcons.Settings },
+        { name: 'User Management', href: '/admin/users', icon: NavigationIcons.Users },
+        { name: 'Roles & Permissions', href: '/admin/roles', icon: NavigationIcons.Roles },
+        { name: 'Audit Logs', href: '/admin/audit-logs', icon: NavigationIcons.AuditLogs },
+        { name: 'System Health', href: '/admin/system-health', icon: NavigationIcons.SystemHealth },
       ],
     },
     {
       name: 'Settings',
       href: '/settings',
-      icon: SettingsIcon,
-      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN],
+      icon: NavigationIcons.Settings,
+      children: [
+        { name: 'General Settings', href: '/settings/general', icon: NavigationIcons.Settings },
+        { name: 'Notifications', href: '/settings/notifications', icon: NavigationIcons.Management },
+        { name: 'Security Settings', href: '/settings/security', icon: NavigationIcons.Admin },
+        { name: 'Integrations', href: '/settings/integrations', icon: NavigationIcons.Management },
+        { name: 'Backup & Restore', href: '/settings/backup', icon: NavigationIcons.Management },
+      ],
     },
   ];
 
@@ -223,6 +383,35 @@ export function FuturisticSidebar({ isOpen, onClose }: FuturisticSidebarProps) {
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
+            </motion.button>
+          </motion.div>
+
+          {/* Search Section */}
+          <motion.div 
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: 0.25 }}
+            className={`p-4 border-b transition-colors duration-300 ${
+              actualTheme === 'dark' ? 'border-white/10' : 'border-gray-200'
+            }`}
+          >
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => setIsSearchOpen(true)}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-300 ${
+                actualTheme === 'dark' 
+                  ? 'bg-white/5 border border-white/10 text-dark-400 hover:bg-white/10 hover:text-white' 
+                  : 'bg-gray-100 border border-gray-200 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
+              }`}
+            >
+              <NavigationIcons.Search className="w-5 h-5" />
+              <span className="text-sm font-medium">Search navigation...</span>
+              <div className={`ml-auto px-2 py-1 text-xs rounded border transition-colors duration-300 ${
+                actualTheme === 'dark' ? 'border-white/20 text-dark-400' : 'border-gray-300 text-gray-500'
+              }`}>
+                ⌘K
+              </div>
             </motion.button>
           </motion.div>
 
@@ -311,6 +500,12 @@ export function FuturisticSidebar({ isOpen, onClose }: FuturisticSidebarProps) {
           </motion.div>
         </div>
       </motion.div>
+      
+      {/* Navigation Search Modal */}
+      <NavigationSearch 
+        isOpen={isSearchOpen} 
+        onClose={() => setIsSearchOpen(false)} 
+      />
     </AnimatePresence>
   );
 }

@@ -55,7 +55,9 @@ export function LineChart({
     animation: animate ? {
       duration: 1000,
       easing: 'easeInOutQuart' as const,
-    } : false,
+    } : {
+      duration: 0,
+    },
     plugins: {
       legend: {
         display: showLegend,
@@ -76,7 +78,7 @@ export function LineChart({
         color: actualTheme === 'dark' ? '#ffffff' : '#111827',
         font: {
           size: 16,
-          weight: '600' as const,
+          weight: 600,
           family: "'Inter', sans-serif",
         },
         padding: {
@@ -95,7 +97,7 @@ export function LineChart({
         displayColors: true,
         titleFont: {
           size: 14,
-          weight: '600' as const,
+          weight: 600,
           family: "'Inter', sans-serif",
         },
         bodyFont: {
