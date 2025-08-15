@@ -769,6 +769,77 @@ export interface LocalContentData extends BaseEntity {
   supportingDocuments: Document[];
 }
 
+// Daily Delivery Types
+export interface DailyDelivery extends BaseEntity {
+  date: string;
+  supplier: {
+    code: string;
+    name: string;
+    address: string;
+    contactPerson: string;
+    phone: string;
+    email: string;
+  };
+  depot: {
+    code: string;
+    name: string;
+    location: string;
+    capacity: number;
+  };
+  customerName: string;
+  location: string;
+  psaNumber: string;
+  wbillNumber: string;
+  invoiceNumber: string;
+  vehicleRegNumber: string;
+  transporter: {
+    code: string;
+    name: string;
+    contactPerson: string;
+    phone: string;
+  };
+  product: {
+    type: 'petrol' | 'diesel' | 'kerosene' | 'lpg';
+    grade: string;
+    quantity: number;
+    unit: 'liters' | 'tons';
+  };
+  unitPrice: number;
+  totalValue: number;
+  currency: 'GHS' | 'USD';
+  status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'completed';
+  approvalStatus: {
+    level: number;
+    approvedBy?: string;
+    approvedAt?: string;
+    comments?: string;
+  };
+  compliance: {
+    npaCompliant: boolean;
+    graCompliant: boolean;
+    epaCompliant: boolean;
+    localContentPercentage: number;
+  };
+  documents: {
+    deliveryNote: boolean;
+    qualityCertificate: boolean;
+    invoiceGenerated: boolean;
+    receiptNumber?: string;
+  };
+  timestamps: {
+    createdAt: string;
+    updatedAt: string;
+    submittedAt?: string;
+    approvedAt?: string;
+  };
+  createdBy: {
+    id: string;
+    name: string;
+    department: string;
+  };
+  notes?: string;
+}
+
 // Configuration Types
 export interface SystemConfiguration {
   module: string;

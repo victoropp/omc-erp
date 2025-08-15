@@ -1,0 +1,363 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { BadRequestException } from '@nestjs/common';
+
+import { DailyDeliveryService } from './daily-delivery.service';
+import { DailyDelivery, DeliveryStatus, StationType, RevenueRecognitionType, ProductGrade } from '../entities/daily-delivery.entity';
+import { DeliveryLineItem } from '../entities/delivery-line-item.entity';
+import { DeliveryApprovalHistory } from '../entities/delivery-approval-history.entity';
+import { DeliveryDocuments } from '../entities/delivery-documents.entity';
+import { DeliveryValidationService } from './delivery-validation.service';
+import { ApprovalWorkflowService } from '../../approval-workflow/approval-workflow.service';
+import { CreateDailyDeliveryDto } from '../dto/create-daily-delivery.dto';
+
+describe('DailyDeliveryService - Station Type Logic', () => {
+  let service: DailyDeliveryService;
+  let deliveryRepository: Repository<DailyDelivery>;
+  let mockQueryRunner: any;
+
+  const mockRepository = {
+    findOne: jest.fn(),
+    find: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+    update: jest.fn(),
+    softDelete: jest.fn(),
+    createQueryBuilder: jest.fn(),
+  };
+
+  const mockDataSource = {
+    createQueryRunner: jest.fn(),
+  };
+
+  const mockEventEmitter = {
+    emit: jest.fn(),
+  };
+
+  const mockValidationService = {
+    validateDelivery: jest.fn(),
+    validateDeliveryUpdate: jest.fn(),
+    validateForApproval: jest.fn(),
+  };
+
+  const mockApprovalService = {
+    startWorkflow: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    mockQueryRunner = {
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: {
+        save: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+
+    mockDataSource.createQueryRunner.mockReturnValue(mockQueryRunner);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DailyDeliveryService,
+        {
+          provide: getRepositoryToken(DailyDelivery),
+          useValue: mockRepository,
+        },
+        {
+          provide: getRepositoryToken(DeliveryLineItem),
+          useValue: mockRepository,
+        },
+        {
+          provide: getRepositoryToken(DeliveryApprovalHistory),
+          useValue: mockRepository,
+        },
+        {
+          provide: getRepositoryToken(DeliveryDocuments),
+          useValue: mockRepository,
+        },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
+        },
+        {
+          provide: EventEmitter2,
+          useValue: mockEventEmitter,
+        },
+        {
+          provide: DeliveryValidationService,
+          useValue: mockValidationService,
+        },
+        {
+          provide: ApprovalWorkflowService,
+          useValue: mockApprovalService,
+        },
+      ],
+    }).compile();
+
+    service = module.get<DailyDeliveryService>(DailyDeliveryService);
+    deliveryRepository = module.get<Repository<DailyDelivery>>(getRepositoryToken(DailyDelivery));
+  });
+
+  describe('Station Type Logic', () => {
+    it('should create COCO delivery with deferred revenue recognition', async () => {
+      // Arrange
+      const createDto: CreateDailyDeliveryDto = {
+        tenantId: '123e4567-e89b-12d3-a456-426614174000',
+        deliveryDate: '2024-01-15',
+        supplierId: '123e4567-e89b-12d3-a456-426614174001',
+        depotId: '123e4567-e89b-12d3-a456-426614174002',
+        customerId: '123e4567-e89b-12d3-a456-426614174003',
+        customerName: 'COCO Station A',
+        deliveryLocation: 'Accra',
+        stationType: StationType.COCO,
+        psaNumber: 'PSA-2024-001',
+        waybillNumber: 'WB-2024-001',
+        vehicleRegistrationNumber: 'GH-1234-23',
+        transporterName: 'Transport Co.',
+        productType: ProductGrade.PMS,
+        productDescription: 'Premium Motor Spirit',
+        quantityLitres: 10000,
+        unitPrice: 4.50,
+        deliveryType: 'DEPOT_TO_STATION' as any,
+        createdBy: '123e4567-e89b-12d3-a456-426614174004',
+      };
+
+      mockValidationService.validateDelivery.mockResolvedValue({ isValid: true, errors: [] });
+      mockRepository.findOne.mockResolvedValue(null); // No duplicates
+      mockRepository.create.mockReturnValue({ id: 'new-delivery-id', ...createDto });
+      mockQueryRunner.manager.save.mockResolvedValue({ id: 'new-delivery-id', ...createDto });
+
+      // Act
+      const result = await service.create(createDto);
+
+      // Assert
+      expect(mockRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stationType: StationType.COCO,
+          revenueRecognitionType: RevenueRecognitionType.DEFERRED,
+          priceBuildupSnapshot: expect.any(String),
+        })
+      );
+    });
+
+    it('should create DODO delivery with immediate revenue recognition', async () => {
+      // Arrange
+      const createDto: CreateDailyDeliveryDto = {
+        tenantId: '123e4567-e89b-12d3-a456-426614174000',
+        deliveryDate: '2024-01-15',
+        supplierId: '123e4567-e89b-12d3-a456-426614174001',
+        depotId: '123e4567-e89b-12d3-a456-426614174002',
+        customerId: '123e4567-e89b-12d3-a456-426614174003',
+        customerName: 'DODO Station B',
+        deliveryLocation: 'Kumasi',
+        stationType: StationType.DODO,
+        psaNumber: 'PSA-2024-002',
+        waybillNumber: 'WB-2024-002',
+        vehicleRegistrationNumber: 'GH-5678-23',
+        transporterName: 'Transport Co.',
+        productType: ProductGrade.PMS,
+        productDescription: 'Premium Motor Spirit',
+        quantityLitres: 8000,
+        unitPrice: 4.65,
+        deliveryType: 'DEPOT_TO_STATION' as any,
+        createdBy: '123e4567-e89b-12d3-a456-426614174004',
+      };
+
+      mockValidationService.validateDelivery.mockResolvedValue({ isValid: true, errors: [] });
+      mockRepository.findOne.mockResolvedValue(null);
+      mockRepository.create.mockReturnValue({ id: 'new-delivery-id', ...createDto });
+      mockQueryRunner.manager.save.mockResolvedValue({ id: 'new-delivery-id', ...createDto });
+
+      // Act
+      await service.create(createDto);
+
+      // Assert
+      expect(mockRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stationType: StationType.DODO,
+          revenueRecognitionType: RevenueRecognitionType.IMMEDIATE,
+          priceBuildupSnapshot: expect.any(String),
+        })
+      );
+    });
+
+    it('should create inventory movement for COCO station completion', async () => {
+      // Arrange
+      const delivery = new DailyDelivery();
+      delivery.id = 'delivery-id';
+      delivery.tenantId = 'tenant-id';
+      delivery.stationType = StationType.COCO;
+      delivery.status = DeliveryStatus.DELIVERED;
+      delivery.deliveryNumber = 'DD-2024-001';
+      delivery.productType = ProductGrade.PMS;
+      delivery.quantityLitres = 10000;
+      delivery.unitPrice = 4.50;
+      delivery.totalValue = 45000;
+      delivery.depotId = 'depot-id';
+      delivery.customerId = 'customer-id';
+      delivery.revenueRecognitionType = RevenueRecognitionType.DEFERRED;
+
+      mockRepository.findOne.mockResolvedValue(delivery);
+
+      // Act
+      await service.completeDeliveryWithStationTypeLogic(delivery.id, 'user-id', delivery.tenantId);
+
+      // Assert
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith('inventory.movement_required', 
+        expect.objectContaining({
+          deliveryId: delivery.id,
+          movementType: 'INBOUND_TRANSFER',
+          stationType: StationType.COCO,
+          revenueRecognitionRequired: true,
+        })
+      );
+
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith('revenue.deferred_recognition_required', 
+        expect.objectContaining({
+          deliveryId: delivery.id,
+          recognitionType: 'DEFERRED',
+          stationType: StationType.COCO,
+        })
+      );
+    });
+
+    it('should create immediate sale for DODO station completion', async () => {
+      // Arrange
+      const delivery = new DailyDelivery();
+      delivery.id = 'delivery-id';
+      delivery.tenantId = 'tenant-id';
+      delivery.stationType = StationType.DODO;
+      delivery.status = DeliveryStatus.DELIVERED;
+      delivery.deliveryNumber = 'DD-2024-002';
+      delivery.productType = ProductGrade.PMS;
+      delivery.quantityLitres = 8000;
+      delivery.unitPrice = 4.65;
+      delivery.totalValue = 37200;
+      delivery.customerId = 'customer-id';
+      delivery.revenueRecognitionType = RevenueRecognitionType.IMMEDIATE;
+      delivery.priceBuildupSnapshot = JSON.stringify({
+        basePrice: 4.50,
+        dealerMargin: 0.15,
+        stationType: StationType.DODO
+      });
+
+      mockRepository.findOne.mockResolvedValue(delivery);
+
+      // Act
+      await service.completeDeliveryWithStationTypeLogic(delivery.id, 'user-id', delivery.tenantId);
+
+      // Assert
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith('sale.immediate_recognition_required', 
+        expect.objectContaining({
+          deliveryId: delivery.id,
+          saleType: 'IMMEDIATE',
+          stationType: StationType.DODO,
+          unitPrice: 4.65, // Base price + dealer margin
+        })
+      );
+    });
+
+    it('should calculate tax accruals from price build-up components', async () => {
+      // Arrange
+      const delivery = new DailyDelivery();
+      delivery.quantityLitres = 10000;
+      delivery.priceBuildupSnapshot = JSON.stringify({
+        taxes: {
+          petroleumTax: 0.20,
+          energyFundLevy: 0.05,
+          roadFundLevy: 0.07,
+          priceStabilizationLevy: 0.16,
+          uppfLevy: 0.46
+        }
+      });
+
+      // Act
+      const taxAccruals = service.calculateTaxAccruals(delivery);
+
+      // Assert
+      expect(taxAccruals).toEqual({
+        petroleumTax: 2000,     // 0.20 * 10000
+        energyFundLevy: 500,    // 0.05 * 10000
+        roadFundLevy: 700,      // 0.07 * 10000
+        priceStabilizationLevy: 1600, // 0.16 * 10000
+        uppfLevy: 4600,         // 0.46 * 10000
+        total: 9400            // Sum of all taxes
+      });
+    });
+  });
+
+  describe('Revenue Recognition Logic', () => {
+    it('should defer revenue for COCO stations', () => {
+      const delivery = new DailyDelivery();
+      delivery.stationType = StationType.COCO;
+      delivery.revenueRecognitionType = RevenueRecognitionType.DEFERRED;
+
+      expect(delivery.shouldDeferRevenue()).toBe(true);
+      expect(delivery.requiresInventoryMovement()).toBe(true);
+      expect(delivery.requiresImmediateSale()).toBe(false);
+    });
+
+    it('should recognize revenue immediately for DODO stations', () => {
+      const delivery = new DailyDelivery();
+      delivery.stationType = StationType.DODO;
+      delivery.revenueRecognitionType = RevenueRecognitionType.IMMEDIATE;
+
+      expect(delivery.shouldDeferRevenue()).toBe(false);
+      expect(delivery.requiresInventoryMovement()).toBe(false);
+      expect(delivery.requiresImmediateSale()).toBe(true);
+    });
+
+    it('should calculate selling price with dealer margin for DODO', () => {
+      const delivery = new DailyDelivery();
+      delivery.stationType = StationType.DODO;
+      delivery.unitPrice = 4.50;
+      delivery.priceBuildupSnapshot = JSON.stringify({
+        basePrice: 4.50,
+        dealerMargin: 0.15,
+        marketingMargin: 0.10
+      });
+
+      const sellingPrice = delivery.getCalculatedSellingPrice();
+      expect(sellingPrice).toBe(4.75); // 4.50 + 0.15 + 0.10
+    });
+
+    it('should calculate cost price without margins for COCO', () => {
+      const delivery = new DailyDelivery();
+      delivery.stationType = StationType.COCO;
+      delivery.unitPrice = 4.50;
+      delivery.priceBuildupSnapshot = JSON.stringify({
+        basePrice: 4.50,
+        dealerMargin: 0.15,
+        marketingMargin: 0.10
+      });
+
+      const costPrice = delivery.getCalculatedSellingPrice();
+      expect(costPrice).toBe(4.50); // Base price only for inventory
+    });
+  });
+
+  describe('Error Handling', () => {
+    it('should throw error for COCO customer invoice generation', async () => {
+      const delivery = new DailyDelivery();
+      delivery.stationType = StationType.COCO;
+
+      await expect(
+        service.createImmediateSale(delivery, 'user-id')
+      ).rejects.toThrow('Delivery does not require immediate sale processing');
+    });
+
+    it('should throw error for DODO inventory movement', async () => {
+      const delivery = new DailyDelivery();
+      delivery.stationType = StationType.DODO;
+
+      await expect(
+        service.createInventoryMovement(delivery, 'user-id')
+      ).rejects.toThrow('Delivery does not require inventory movement');
+    });
+  });
+});

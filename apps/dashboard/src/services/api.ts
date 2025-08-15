@@ -1343,6 +1343,216 @@ export class FleetService extends ApiService {
   }
 }
 
+// Daily Delivery Management Service
+export class DailyDeliveryService extends ApiService {
+  constructor() {
+    super('/daily-deliveries');
+  }
+
+  // Daily Delivery CRUD Operations
+  async getDailyDeliveries(filters?: any) {
+    const params = new URLSearchParams(filters).toString();
+    return this.get(`?${params}`);
+  }
+
+  async getDailyDelivery(id: string) {
+    return this.get(`/${id}`);
+  }
+
+  async createDailyDelivery(delivery: any) {
+    return this.post('', delivery);
+  }
+
+  async updateDailyDelivery(id: string, delivery: any) {
+    return this.put(`/${id}`, delivery);
+  }
+
+  async deleteDailyDelivery(id: string) {
+    return this.delete(`/${id}`);
+  }
+
+  // Bulk operations
+  async bulkCreateDeliveries(deliveries: any[]) {
+    return this.post('/bulk', { deliveries });
+  }
+
+  async bulkUpdateDeliveries(updates: any[]) {
+    return this.put('/bulk', { updates });
+  }
+
+  async importDeliveries(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.post(`${this.baseUrl}/import`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  }
+
+  async exportDeliveries(filters?: any, format: 'csv' | 'xlsx' = 'xlsx') {
+    const params = new URLSearchParams({ ...filters, format }).toString();
+    const response = await apiClient.get(`${this.baseUrl}/export?${params}`, {
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  // Approval Workflow
+  async submitForApproval(id: string) {
+    return this.patch(`/${id}/submit-approval`);
+  }
+
+  async approveDelivery(id: string, comments?: string) {
+    return this.patch(`/${id}/approve`, { comments });
+  }
+
+  async rejectDelivery(id: string, reason: string) {
+    return this.patch(`/${id}/reject`, { reason });
+  }
+
+  async getPendingApprovals() {
+    return this.get('/pending-approvals');
+  }
+
+  async getApprovalHistory(id: string) {
+    return this.get(`/${id}/approval-history`);
+  }
+
+  // Invoice Generation
+  async generateSupplierInvoice(id: string) {
+    const response = await apiClient.get(`${this.baseUrl}/${id}/supplier-invoice`, {
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  async generateCustomerInvoice(id: string) {
+    const response = await apiClient.get(`${this.baseUrl}/${id}/customer-invoice`, {
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  async bulkGenerateInvoices(ids: string[], type: 'supplier' | 'customer') {
+    const response = await apiClient.post(`${this.baseUrl}/bulk-generate-invoices`, 
+      { ids, type }, 
+      { responseType: 'blob' }
+    );
+    return response.data;
+  }
+
+  // Ghana-specific Compliance
+  async validateGhanaCompliance(delivery: any) {
+    return this.post('/validate-compliance', delivery);
+  }
+
+  async generateNPAReport(dateRange: { start: string; end: string }) {
+    return this.get(`/npa-report?start=${dateRange.start}&end=${dateRange.end}`);
+  }
+
+  async generateGRAReport(dateRange: { start: string; end: string }) {
+    return this.get(`/gra-report?start=${dateRange.start}&end=${dateRange.end}`);
+  }
+
+  async generateEPAReport(dateRange: { start: string; end: string }) {
+    return this.get(`/epa-report?start=${dateRange.start}&end=${dateRange.end}`);
+  }
+
+  // Analytics and Reporting
+  async getDailyDeliveryMetrics(period?: string) {
+    return this.get(`/metrics${period ? `?period=${period}` : ''}`);
+  }
+
+  async getDeliveryTrends(period: string = '30d') {
+    return this.get(`/trends?period=${period}`);
+  }
+
+  async getSupplierPerformance() {
+    return this.get('/supplier-performance');
+  }
+
+  async getCustomerAnalytics() {
+    return this.get('/customer-analytics');
+  }
+
+  async getComplianceReport(period: string) {
+    return this.get(`/compliance-report?period=${period}`);
+  }
+
+  // Real-time Features
+  async getRealtimeUpdates() {
+    return this.get('/realtime-updates');
+  }
+
+  async subscribeToUpdates(deliveryIds: string[]) {
+    return this.post('/subscribe-updates', { deliveryIds });
+  }
+
+  async unsubscribeFromUpdates(deliveryIds: string[]) {
+    return this.post('/unsubscribe-updates', { deliveryIds });
+  }
+
+  // Validation and Verification
+  async validateDeliveryData(data: any) {
+    return this.post('/validate', data);
+  }
+
+  async verifySupplierData(supplierCode: string) {
+    return this.get(`/verify-supplier/${supplierCode}`);
+  }
+
+  async verifyCustomerData(customerCode: string) {
+    return this.get(`/verify-customer/${customerCode}`);
+  }
+
+  async checkDuplicateDelivery(deliveryData: any) {
+    return this.post('/check-duplicate', deliveryData);
+  }
+
+  // Templates and Configuration
+  async getDeliveryTemplates() {
+    return this.get('/templates');
+  }
+
+  async createDeliveryTemplate(template: any) {
+    return this.post('/templates', template);
+  }
+
+  async updateDeliveryTemplate(id: string, template: any) {
+    return this.put(`/templates/${id}`, template);
+  }
+
+  async deleteDeliveryTemplate(id: string) {
+    return this.delete(`/templates/${id}`);
+  }
+
+  // Master Data Integration
+  async getSuppliers() {
+    return this.get('/master-data/suppliers');
+  }
+
+  async getDepots() {
+    return this.get('/master-data/depots');
+  }
+
+  async getTransporters() {
+    return this.get('/master-data/transporters');
+  }
+
+  async getProducts() {
+    return this.get('/master-data/products');
+  }
+
+  // Audit and History
+  async getAuditTrail(id: string) {
+    return this.get(`/${id}/audit-trail`);
+  }
+
+  async getChangeHistory(id: string) {
+    return this.get(`/${id}/change-history`);
+  }
+}
+
 // Export service instances
 export const authService = new AuthService();
 export const dashboardService = new DashboardService();
@@ -1361,6 +1571,7 @@ export const reportsService = new ReportsService();
 export const dealerService = new DealerService();
 export const ifrsService = new IFRSService();
 export const fleetService = new FleetService();
+export const dailyDeliveryService = new DailyDeliveryService();
 export const wsService = new WebSocketService();
 
 // Export default API client

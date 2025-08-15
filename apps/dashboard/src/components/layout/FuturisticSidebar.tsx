@@ -200,6 +200,15 @@ export function FuturisticSidebar({ isOpen, onClose }: FuturisticSidebarProps) {
       roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN],
     },
 
+    // DAILY DELIVERY MANAGEMENT
+    {
+      name: 'Daily Deliveries',
+      href: '/daily-deliveries',
+      icon: NavigationIcons.Management,
+      badge: 'New',
+      roles: [UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.STATION_MANAGER],
+    },
+
     // FINANCIAL MANAGEMENT
     {
       name: 'Financial Management',

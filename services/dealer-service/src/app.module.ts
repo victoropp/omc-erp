@@ -5,12 +5,25 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { BullModule } from '@nestjs/bull';
 
-// Feature Modules
+// Entities
+import { DealerLoan } from './entities/dealer-loan.entity';
+import { DealerLoanPayment } from './entities/dealer-loan-payment.entity';
+import { DealerMarginAccrual } from './entities/dealer-margin-accrual.entity';
+import { DealerSettlement } from './entities/dealer-settlement.entity';
+
+// Services
+import { DealerSettlementService } from './services/dealer-settlement.service';
+import { DealerLoanManagementService } from './services/dealer-loan-management.service';
+import { DealerMarginAccrualService } from './services/dealer-margin-accrual.service';
+import { DealerPerformanceService } from './services/dealer-performance.service';
+import { DealerSettlementStatementService } from './services/dealer-settlement-statement.service';
+import { DealerPaymentAutomationService } from './services/dealer-payment-automation.service';
+
+// Controllers
+import { DealerManagementController } from './controllers/dealer-management.controller';
+
+// Legacy Modules (keeping for backwards compatibility)
 import { DealerOnboardingModule } from './onboarding/dealer-onboarding.module';
-import { DealerMarginModule } from './margins/dealer-margin.module';
-import { LoanManagementModule } from './loans/loan-management.module';
-import { SettlementProcessingModule } from './settlements/settlement-processing.module';
-import { DealerAnalyticsModule } from './analytics/dealer-analytics.module';
 import { HealthModule } from './health/health.module';
 
 // Shared Modules
@@ -68,17 +81,43 @@ import { NotificationModule } from './notifications/notification.module';
       }),
     }),
 
+    // TypeORM for entities
+    TypeOrmModule.forFeature([
+      DealerLoan,
+      DealerLoanPayment,
+      DealerMarginAccrual,
+      DealerSettlement,
+    ]),
+
     // Core modules
     DatabaseModule,
     HealthModule,
     NotificationModule,
 
-    // Feature modules
+    // Legacy Feature modules (keeping for backwards compatibility)
     DealerOnboardingModule,
-    DealerMarginModule,
-    LoanManagementModule,
-    SettlementProcessingModule,
-    DealerAnalyticsModule,
+  ],
+  
+  controllers: [
+    DealerManagementController,
+  ],
+  
+  providers: [
+    DealerSettlementService,
+    DealerLoanManagementService,
+    DealerMarginAccrualService,
+    DealerPerformanceService,
+    DealerSettlementStatementService,
+    DealerPaymentAutomationService,
+  ],
+  
+  exports: [
+    DealerSettlementService,
+    DealerLoanManagementService,
+    DealerMarginAccrualService,
+    DealerPerformanceService,
+    DealerSettlementStatementService,
+    DealerPaymentAutomationService,
   ],
 })
 export class AppModule {}

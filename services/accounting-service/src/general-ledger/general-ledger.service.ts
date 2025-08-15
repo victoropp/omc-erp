@@ -25,6 +25,11 @@ export interface JournalLineData {
   supplierId?: string;
   costCenter?: string;
   project?: string;
+  taxType?: string;
+  taxRate?: number;
+  baseAmount?: number;
+  ifrsCategory?: string;
+  complianceCode?: string;
 }
 
 export interface TrialBalanceData {
@@ -36,6 +41,9 @@ export interface TrialBalanceData {
   periodCredit: number;
   closingDebit: number;
   closingCredit: number;
+  taxAccruals?: number;
+  taxPayments?: number;
+  netTaxPosition?: number;
 }
 
 @Injectable()
@@ -48,7 +56,7 @@ export class GeneralLedgerService {
   ) {}
 
   /**
-   * Create automated journal entry for any transaction
+   * Create automated journal entry for any transaction with enhanced station type handling
    */
   async createJournalEntry(data: JournalEntryData): Promise<any> {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -162,6 +170,429 @@ export class GeneralLedgerService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  /**
+   * Create automatic journal entry for daily delivery based on station type
+   */
+  async createDeliveryJournalEntry(deliveryData: {
+    deliveryId: string;
+    stationType: 'COCO' | 'DOCO' | 'DODO' | 'OTHER';
+    productType: string;
+    quantity: number;
+    unitPrice: number;
+    totalValue: number;
+    supplierId?: string;
+    customerId?: string;
+    stationId: string;
+    taxBreakdown: {
+      petroleumTax: number;
+      energyFundLevy: number;
+      roadFundLevy: number;
+      priceStabilizationLevy: number;
+      uppfLevy: number;
+      vat: number;
+      customsDuty: number;
+    };
+    margins?: {
+      primaryDistribution: number;
+      marketing: number;
+      dealer: number;
+    };
+    deliveryDate: Date;
+    tenantId: string;
+  }): Promise<any> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Determine journal entry type based on station type
+      const journalEntries = await this.buildStationTypeJournalEntries(deliveryData);
+
+      const createdEntries = [];
+
+      for (const entryData of journalEntries) {
+        const entry = await this.createJournalEntry(entryData);
+        createdEntries.push(entry);
+      }
+
+      await queryRunner.commitTransaction();
+
+      this.logger.log(`Created ${createdEntries.length} journal entries for delivery ${deliveryData.deliveryId}`);
+      
+      // Emit event for real-time updates
+      this.eventEmitter.emit('delivery.journal_entries.created', {
+        deliveryId: deliveryData.deliveryId,
+        stationType: deliveryData.stationType,
+        journalEntries: createdEntries,
+        totalValue: deliveryData.totalValue,
+      });
+
+      return createdEntries;
+
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(`Failed to create delivery journal entries for ${deliveryData.deliveryId}:`, error);
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Build journal entries based on station type
+   */
+  private async buildStationTypeJournalEntries(deliveryData: any): Promise<JournalEntryData[]> {
+    const entries: JournalEntryData[] = [];
+
+    if (deliveryData.stationType === 'COCO' || deliveryData.stationType === 'DOCO') {
+      // COCO/DOCO: Dr Inventory, Cr Accounts Payable (supplier invoice)
+      entries.push({
+        journalDate: deliveryData.deliveryDate,
+        description: `Supplier Invoice - ${deliveryData.productType} delivery to ${deliveryData.stationType}`,
+        journalType: 'PURCHASE',
+        sourceModule: 'DAILY_DELIVERY',
+        sourceDocumentType: 'SUPPLIER_INVOICE',
+        sourceDocumentId: deliveryData.deliveryId,
+        lines: this.buildSupplierInvoiceLines(deliveryData),
+      });
+    } else {
+      // DODO/Others: Dr Accounts Receivable, Cr Sales Revenue (immediate sale)
+      entries.push({
+        journalDate: deliveryData.deliveryDate,
+        description: `Customer Sale - ${deliveryData.productType} delivery to ${deliveryData.stationType}`,
+        journalType: 'SALES',
+        sourceModule: 'DAILY_DELIVERY',
+        sourceDocumentType: 'CUSTOMER_INVOICE',
+        sourceDocumentId: deliveryData.deliveryId,
+        lines: this.buildCustomerSalesLines(deliveryData),
+      });
+    }
+
+    // Create tax accrual entries for all deliveries
+    const taxAccrualEntry = this.buildTaxAccrualEntry(deliveryData);
+    if (taxAccrualEntry) {
+      entries.push(taxAccrualEntry);
+    }
+
+    return entries;
+  }
+
+  /**
+   * Build supplier invoice journal lines for COCO/DOCO
+   */
+  private buildSupplierInvoiceLines(deliveryData: any): JournalLineData[] {
+    const lines: JournalLineData[] = [];
+
+    // Dr Inventory
+    lines.push({
+      accountCode: this.getInventoryAccount(deliveryData.productType),
+      description: `${deliveryData.productType} Inventory - ${deliveryData.quantity}L`,
+      debitAmount: deliveryData.totalValue,
+      creditAmount: 0,
+      stationId: deliveryData.stationId,
+      supplierId: deliveryData.supplierId,
+      costCenter: deliveryData.stationId,
+      ifrsCategory: 'INVENTORY',
+    });
+
+    // Cr Accounts Payable
+    lines.push({
+      accountCode: '2100', // Accounts Payable
+      description: `Accounts Payable - ${deliveryData.supplierId}`,
+      debitAmount: 0,
+      creditAmount: deliveryData.totalValue,
+      stationId: deliveryData.stationId,
+      supplierId: deliveryData.supplierId,
+      costCenter: deliveryData.stationId,
+    });
+
+    return lines;
+  }
+
+  /**
+   * Build customer sales journal lines for DODO/Others
+   */
+  private buildCustomerSalesLines(deliveryData: any): JournalLineData[] {
+    const lines: JournalLineData[] = [];
+
+    const totalWithMargins = deliveryData.totalValue + 
+                           (deliveryData.margins?.primaryDistribution || 0) +
+                           (deliveryData.margins?.marketing || 0) +
+                           (deliveryData.margins?.dealer || 0);
+
+    // Dr Accounts Receivable
+    lines.push({
+      accountCode: '1200', // Accounts Receivable
+      description: `Accounts Receivable - ${deliveryData.customerId}`,
+      debitAmount: totalWithMargins,
+      creditAmount: 0,
+      stationId: deliveryData.stationId,
+      customerId: deliveryData.customerId,
+      costCenter: deliveryData.stationId,
+    });
+
+    // Cr Sales Revenue
+    lines.push({
+      accountCode: this.getRevenueAccount(deliveryData.productType),
+      description: `${deliveryData.productType} Sales Revenue`,
+      debitAmount: 0,
+      creditAmount: deliveryData.totalValue,
+      stationId: deliveryData.stationId,
+      customerId: deliveryData.customerId,
+      costCenter: deliveryData.stationId,
+      ifrsCategory: 'REVENUE',
+    });
+
+    // Cr Margin Revenue accounts
+    if (deliveryData.margins) {
+      if (deliveryData.margins.primaryDistribution > 0) {
+        lines.push({
+          accountCode: '4210', // Primary Distribution Margin
+          description: 'Primary Distribution Margin',
+          debitAmount: 0,
+          creditAmount: deliveryData.margins.primaryDistribution,
+          stationId: deliveryData.stationId,
+          customerId: deliveryData.customerId,
+          ifrsCategory: 'REVENUE',
+        });
+      }
+
+      if (deliveryData.margins.marketing > 0) {
+        lines.push({
+          accountCode: '4220', // Marketing Margin
+          description: 'Marketing Margin',
+          debitAmount: 0,
+          creditAmount: deliveryData.margins.marketing,
+          stationId: deliveryData.stationId,
+          customerId: deliveryData.customerId,
+          ifrsCategory: 'REVENUE',
+        });
+      }
+
+      if (deliveryData.margins.dealer > 0) {
+        lines.push({
+          accountCode: '4230', // Dealer Margin
+          description: 'Dealer Margin',
+          debitAmount: 0,
+          creditAmount: deliveryData.margins.dealer,
+          stationId: deliveryData.stationId,
+          customerId: deliveryData.customerId,
+          ifrsCategory: 'REVENUE',
+        });
+      }
+    }
+
+    return lines;
+  }
+
+  /**
+   * Build tax accrual entry for all deliveries
+   */
+  private buildTaxAccrualEntry(deliveryData: any): JournalEntryData {
+    const taxLines: JournalLineData[] = [];
+    const taxes = deliveryData.taxBreakdown;
+
+    // Build tax accrual lines
+    if (taxes.petroleumTax > 0) {
+      taxLines.push(
+        {
+          accountCode: '5100', // Tax Expense
+          description: 'Petroleum Tax Expense',
+          debitAmount: taxes.petroleumTax,
+          creditAmount: 0,
+          stationId: deliveryData.stationId,
+          taxType: 'PETROLEUM_TAX',
+          taxRate: 17,
+          baseAmount: deliveryData.totalValue,
+        },
+        {
+          accountCode: '2220', // Petroleum Tax Payable
+          description: 'Petroleum Tax Payable',
+          debitAmount: 0,
+          creditAmount: taxes.petroleumTax,
+          stationId: deliveryData.stationId,
+          taxType: 'PETROLEUM_TAX',
+          complianceCode: 'GRA_PET_TAX',
+        }
+      );
+    }
+
+    if (taxes.energyFundLevy > 0) {
+      taxLines.push(
+        {
+          accountCode: '5110', // Energy Fund Levy Expense
+          description: 'Energy Fund Levy Expense',
+          debitAmount: taxes.energyFundLevy,
+          creditAmount: 0,
+          stationId: deliveryData.stationId,
+          taxType: 'ENERGY_FUND_LEVY',
+        },
+        {
+          accountCode: '2230', // Energy Fund Levy Payable
+          description: 'Energy Fund Levy Payable',
+          debitAmount: 0,
+          creditAmount: taxes.energyFundLevy,
+          stationId: deliveryData.stationId,
+          taxType: 'ENERGY_FUND_LEVY',
+          complianceCode: 'ENERGY_COMMISSION',
+        }
+      );
+    }
+
+    if (taxes.roadFundLevy > 0) {
+      taxLines.push(
+        {
+          accountCode: '5120', // Road Fund Levy Expense
+          description: 'Road Fund Levy Expense',
+          debitAmount: taxes.roadFundLevy,
+          creditAmount: 0,
+          stationId: deliveryData.stationId,
+          taxType: 'ROAD_FUND_LEVY',
+        },
+        {
+          accountCode: '2240', // Road Fund Levy Payable
+          description: 'Road Fund Levy Payable',
+          debitAmount: 0,
+          creditAmount: taxes.roadFundLevy,
+          stationId: deliveryData.stationId,
+          taxType: 'ROAD_FUND_LEVY',
+          complianceCode: 'ROAD_FUND',
+        }
+      );
+    }
+
+    if (taxes.priceStabilizationLevy > 0) {
+      taxLines.push(
+        {
+          accountCode: '5130', // Price Stabilization Expense
+          description: 'Price Stabilization Levy Expense',
+          debitAmount: taxes.priceStabilizationLevy,
+          creditAmount: 0,
+          stationId: deliveryData.stationId,
+          taxType: 'PRICE_STABILIZATION_LEVY',
+        },
+        {
+          accountCode: '2260', // Price Stabilization Payable
+          description: 'Price Stabilization Levy Payable',
+          debitAmount: 0,
+          creditAmount: taxes.priceStabilizationLevy,
+          stationId: deliveryData.stationId,
+          taxType: 'PRICE_STABILIZATION_LEVY',
+          complianceCode: 'NPA_PSL',
+        }
+      );
+    }
+
+    if (taxes.uppfLevy > 0) {
+      taxLines.push(
+        {
+          accountCode: '5140', // UPPF Levy Expense
+          description: 'UPPF Levy Expense',
+          debitAmount: taxes.uppfLevy,
+          creditAmount: 0,
+          stationId: deliveryData.stationId,
+          taxType: 'UPPF_LEVY',
+        },
+        {
+          accountCode: '2250', // UPPF Levy Payable
+          description: 'UPPF Levy Payable',
+          debitAmount: 0,
+          creditAmount: taxes.uppfLevy,
+          stationId: deliveryData.stationId,
+          taxType: 'UPPF_LEVY',
+          complianceCode: 'UPPF_BOARD',
+        }
+      );
+    }
+
+    if (taxes.vat > 0) {
+      taxLines.push(
+        {
+          accountCode: '5200', // VAT Expense
+          description: 'VAT Expense',
+          debitAmount: taxes.vat,
+          creditAmount: 0,
+          stationId: deliveryData.stationId,
+          taxType: 'VAT',
+          taxRate: 12.5,
+        },
+        {
+          accountCode: '2210', // VAT Payable
+          description: 'VAT Payable',
+          debitAmount: 0,
+          creditAmount: taxes.vat,
+          stationId: deliveryData.stationId,
+          taxType: 'VAT',
+          complianceCode: 'GRA_VAT',
+        }
+      );
+    }
+
+    if (taxes.customsDuty > 0) {
+      taxLines.push(
+        {
+          accountCode: '5150', // Customs Duty Expense
+          description: 'Customs Duty Expense',
+          debitAmount: taxes.customsDuty,
+          creditAmount: 0,
+          stationId: deliveryData.stationId,
+          taxType: 'CUSTOMS_DUTY',
+        },
+        {
+          accountCode: '2270', // Customs Duty Payable
+          description: 'Customs Duty Payable',
+          debitAmount: 0,
+          creditAmount: taxes.customsDuty,
+          stationId: deliveryData.stationId,
+          taxType: 'CUSTOMS_DUTY',
+          complianceCode: 'GRA_CUSTOMS',
+        }
+      );
+    }
+
+    if (taxLines.length === 0) return null;
+
+    return {
+      journalDate: deliveryData.deliveryDate,
+      description: `Tax Accruals - ${deliveryData.productType} delivery`,
+      journalType: 'TAX_ACCRUAL',
+      sourceModule: 'DAILY_DELIVERY',
+      sourceDocumentType: 'TAX_ACCRUAL',
+      sourceDocumentId: `${deliveryData.deliveryId}_TAX`,
+      lines: taxLines,
+    };
+  }
+
+  /**
+   * Get inventory account by product type
+   */
+  private getInventoryAccount(productType: string): string {
+    const accountMap = {
+      'PMS': '1310', // PMS Inventory
+      'AGO': '1320', // AGO Inventory  
+      'IFO': '1330', // IFO Inventory
+      'LPG': '1340', // LPG Inventory
+      'KEROSENE': '1350', // Kerosene Inventory
+      'LUBRICANTS': '1360', // Lubricants Inventory
+    };
+    return accountMap[productType] || '1300'; // General Inventory
+  }
+
+  /**
+   * Get revenue account by product type
+   */
+  private getRevenueAccount(productType: string): string {
+    const accountMap = {
+      'PMS': '4110', // PMS Sales Revenue
+      'AGO': '4120', // AGO Sales Revenue
+      'IFO': '4130', // IFO Sales Revenue
+      'LPG': '4140', // LPG Sales Revenue
+      'KEROSENE': '4150', // Kerosene Sales Revenue
+      'LUBRICANTS': '4160', // Lubricants Sales Revenue
+    };
+    return accountMap[productType] || '4100'; // General Sales Revenue
   }
 
   /**

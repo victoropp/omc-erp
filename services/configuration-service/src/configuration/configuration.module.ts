@@ -10,20 +10,46 @@ import { ConfigurationValidationService } from './services/configuration-validat
 import { ConfigurationAuditService } from './services/configuration-audit.service';
 import { ConfigurationNotificationService } from './services/configuration-notification.service';
 
+// Price Build-up imports
+import { PriceBuildupService } from './services/price-buildup.service';
+import { StationTypeConfigurationService } from './services/station-type-config.service';
+import { ApprovalWorkflowService } from './services/approval-workflow.service';
+import { ThreadSafeConfigurationService } from './services/thread-safe-config.service';
+import { PriceBuildupController } from './controllers/price-buildup.controller';
+import { 
+  PriceBuildupVersion, 
+  PriceComponent, 
+  StationTypePricing, 
+  PriceBuildupAuditTrail 
+} from './entities/price-buildup.entity';
+
 @Global()
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Configuration]),
+    TypeOrmModule.forFeature([
+      Configuration,
+      PriceBuildupVersion,
+      PriceComponent,
+      StationTypePricing,
+      PriceBuildupAuditTrail,
+    ]),
     EventEmitterModule,
     ScheduleModule.forRoot(),
   ],
-  controllers: [ConfigurationController],
+  controllers: [
+    ConfigurationController,
+    PriceBuildupController,
+  ],
   providers: [
     ConfigurationService,
     ConfigurationInitializationService,
     ConfigurationValidationService,
     ConfigurationAuditService,
     ConfigurationNotificationService,
+    PriceBuildupService,
+    StationTypeConfigurationService,
+    ApprovalWorkflowService,
+    ThreadSafeConfigurationService,
   ],
   exports: [
     ConfigurationService,
@@ -31,6 +57,10 @@ import { ConfigurationNotificationService } from './services/configuration-notif
     ConfigurationValidationService,
     ConfigurationAuditService,
     ConfigurationNotificationService,
+    PriceBuildupService,
+    StationTypeConfigurationService,
+    ApprovalWorkflowService,
+    ThreadSafeConfigurationService,
   ],
 })
 export class ConfigurationModule {}

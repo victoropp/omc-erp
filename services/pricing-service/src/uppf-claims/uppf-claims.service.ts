@@ -1,7 +1,13 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, In } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { firstValueFrom } from 'rxjs';
+import Decimal from 'decimal.js';
+import { addDays, subDays, startOfMonth, endOfMonth, format, differenceInDays } from 'date-fns';
 
 // Entity interfaces (would be imported from actual entities)
 interface UppfClaim {
@@ -110,6 +116,103 @@ export interface UppfClaimSummary {
   settlementRate: number;
 }
 
+// Enhanced interfaces for comprehensive price build-up integration
+export interface UPPFPricingComponent {
+  componentId: string;
+  componentName: string;
+  componentType: 'LEVY' | 'FUND' | 'TAX' | 'MARGIN';
+  calculationMethod: 'PER_LITRE' | 'PERCENTAGE' | 'FIXED';
+  baseRate: number;
+  adjustmentFactors: PricingAdjustmentFactor[];
+  applicableProducts: string[];
+  geographicScope: string[];
+  effectiveDate: Date;
+  expiryDate?: Date;
+  npaApproved: boolean;
+  lastReviewDate: Date;
+  nextReviewDate: Date;
+}
+
+export interface PricingAdjustmentFactor {
+  factorType: 'ROUTE_COMPLEXITY' | 'PRODUCT_CATEGORY' | 'VOLUME_TIER' | 'SEASONAL' | 'COMPLIANCE_BONUS';
+  factorName: string;
+  multiplier: number;
+  conditions: string[];
+  isActive: boolean;
+}
+
+export interface PriceBuildup {
+  productType: string;
+  pricingWindow: string;
+  basePrice: number;
+  components: PriceBuildupComponent[];
+  totalPrice: number;
+  uppfComponent: UPPFPricingComponent;
+  dealerMargin: number;
+  omcMargin: number;
+  calculationDate: Date;
+  approvalStatus: string;
+  varianceFromPrevious: number;
+}
+
+export interface PriceBuildupComponent {
+  componentCode: string;
+  componentName: string;
+  amount: number;
+  calculationBasis: string;
+  sourceDocument: string;
+  approvalReference: string;
+}
+
+export interface UPPFLevyCalculation {
+  productType: string;
+  volumeLitres: number;
+  baseUppfRate: number;
+  adjustedUppfRate: number;
+  adjustmentFactors: {
+    routeComplexity: number;
+    productCategory: number;
+    volumeTier: number;
+    complianceBonus: number;
+  };
+  totalUppfLevy: number;
+  claimableAmount: number;
+  nonClaimableAmount: number;
+  calculationBreakdown: any;
+}
+
+export interface AutomaticPricingIntegration {
+  enabled: boolean;
+  updateFrequency: 'REALTIME' | 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  npaDataSource: string;
+  validationRules: PricingValidationRule[];
+  alertThresholds: PricingAlertThreshold[];
+  fallbackMechanism: FallbackMechanism;
+}
+
+export interface PricingValidationRule {
+  ruleId: string;
+  ruleName: string;
+  ruleType: 'VARIANCE_CHECK' | 'APPROVAL_REQUIRED' | 'HISTORICAL_COMPARISON' | 'MARKET_BENCHMARK';
+  parameters: any;
+  severity: 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+  autoCorrect: boolean;
+}
+
+export interface PricingAlertThreshold {
+  thresholdType: 'VARIANCE_PERCENT' | 'ABSOLUTE_CHANGE' | 'VOLUME_IMPACT';
+  thresholdValue: number;
+  alertLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  notificationChannels: string[];
+}
+
+export interface FallbackMechanism {
+  useHistoricalData: boolean;
+  useMarketAverage: boolean;
+  manualOverride: boolean;
+  emergencyContact: string[];
+}
+
 export interface ThreeWayReconciliationDto {
   consignmentId: string;
   depotLoadedLitres: number;
@@ -125,17 +228,387 @@ export interface ThreeWayReconciliationDto {
 export class UppfClaimsService {
   private readonly logger = new Logger(UppfClaimsService.name);
 
-  // Standard UPPF tariff rates (GHS per litre per km)
-  private readonly DEFAULT_UPPF_TARIFF = 0.0012; // GHS 0.12 pesewas per litre per km
-  private readonly VARIANCE_TOLERANCE = 0.02; // 2% tolerance for three-way reconciliation
+  // Enhanced UPPF pricing configuration
+  private readonly UPPF_PRICING_CONFIG = {
+    DEFAULT_TARIFF: 0.0012, // GHS per litre per km
+    VARIANCE_TOLERANCE: 0.02, // 2% tolerance for three-way reconciliation
+    BASE_RATES: {
+      'PMS': 0.46, // GHS per litre
+      'AGO': 0.46,
+      'KEROSENE': 0.20,
+      'LPG': 0.00, // Not eligible
+    },
+    ADJUSTMENT_FACTORS: {
+      ROUTE_COMPLEXITY: {
+        'HIGHWAY': 1.0,
+        'URBAN': 1.15,
+        'RURAL': 1.25,
+        'REMOTE': 1.5,
+      },
+      PRODUCT_CATEGORY: {
+        'PMS': 1.0,
+        'AGO': 1.0,
+        'KEROSENE': 0.8,
+      },
+      VOLUME_TIER: {
+        'SMALL': 1.0,    // < 20,000L
+        'MEDIUM': 1.05,  // 20,000L - 50,000L
+        'LARGE': 1.10,   // > 50,000L
+      },
+    },
+  };
+
+  private pricingIntegration: AutomaticPricingIntegration = {
+    enabled: true,
+    updateFrequency: 'DAILY',
+    npaDataSource: 'https://npa.gov.gh/pricing',
+    validationRules: [],
+    alertThresholds: [],
+    fallbackMechanism: {
+      useHistoricalData: true,
+      useMarketAverage: true,
+      manualOverride: true,
+      emergencyContact: ['pricing@omc.com', 'operations@omc.com'],
+    },
+  };
 
   constructor(
-    // These would be actual TypeORM repositories in real implementation
-    private readonly eventEmitter: EventEmitter2
-  ) {}
+    private readonly eventEmitter: EventEmitter2,
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService,
+  ) {
+    this.initializePricingIntegration();
+  }
+
+  private initializePricingIntegration(): void {
+    // Initialize validation rules
+    this.pricingIntegration.validationRules = [
+      {
+        ruleId: 'VAR_001',
+        ruleName: 'UPPF Rate Variance Check',
+        ruleType: 'VARIANCE_CHECK',
+        parameters: { maxVariancePercent: 10, compareToLastMonth: true },
+        severity: 'WARNING',
+        autoCorrect: false,
+      },
+      {
+        ruleId: 'APP_001',
+        ruleName: 'NPA Approval Required',
+        ruleType: 'APPROVAL_REQUIRED',
+        parameters: { thresholdAmount: 0.05 },
+        severity: 'ERROR',
+        autoCorrect: false,
+      },
+      {
+        ruleId: 'HIS_001',
+        ruleName: 'Historical Comparison',
+        ruleType: 'HISTORICAL_COMPARISON',
+        parameters: { lookbackMonths: 6, maxDeviation: 20 },
+        severity: 'INFO',
+        autoCorrect: false,
+      },
+    ];
+
+    // Initialize alert thresholds
+    this.pricingIntegration.alertThresholds = [
+      {
+        thresholdType: 'VARIANCE_PERCENT',
+        thresholdValue: 5,
+        alertLevel: 'LOW',
+        notificationChannels: ['email'],
+      },
+      {
+        thresholdType: 'VARIANCE_PERCENT',
+        thresholdValue: 10,
+        alertLevel: 'HIGH',
+        notificationChannels: ['email', 'sms'],
+      },
+      {
+        thresholdType: 'ABSOLUTE_CHANGE',
+        thresholdValue: 0.10,
+        alertLevel: 'CRITICAL',
+        notificationChannels: ['email', 'sms', 'dashboard_alert'],
+      },
+    ];
+  }
 
   /**
-   * Create a new UPPF claim with automatic calculation
+   * Calculate UPPF levy with enhanced price build-up integration
+   */
+  async calculateUPPFLevy(params: {
+    productType: string;
+    volumeLitres: number;
+    routeComplexity: string;
+    deliveryDate: Date;
+    customPricingWindow?: string;
+  }): Promise<UPPFLevyCalculation> {
+    this.logger.log(`Calculating UPPF levy for ${params.volumeLitres}L of ${params.productType}`);
+
+    try {
+      // Get current UPPF pricing component
+      const uppfComponent = await this.getCurrentUPPFComponent(params.productType, params.customPricingWindow);
+      
+      if (!uppfComponent) {
+        throw new BadRequestException(`UPPF component not found for product ${params.productType}`);
+      }
+
+      // Calculate adjustment factors
+      const adjustmentFactors = {
+        routeComplexity: this.UPPF_PRICING_CONFIG.ADJUSTMENT_FACTORS.ROUTE_COMPLEXITY[params.routeComplexity] || 1.0,
+        productCategory: this.UPPF_PRICING_CONFIG.ADJUSTMENT_FACTORS.PRODUCT_CATEGORY[params.productType] || 1.0,
+        volumeTier: this.calculateVolumeTierFactor(params.volumeLitres),
+        complianceBonus: await this.calculateComplianceBonus(params),
+      };
+
+      // Calculate adjusted UPPF rate
+      const baseUppfRate = uppfComponent.baseRate;
+      const adjustedUppfRate = baseUppfRate * 
+        adjustmentFactors.routeComplexity * 
+        adjustmentFactors.productCategory * 
+        adjustmentFactors.volumeTier * 
+        (1 + adjustmentFactors.complianceBonus);
+
+      // Calculate total UPPF levy
+      const totalUppfLevy = new Decimal(params.volumeLitres)
+        .mul(adjustedUppfRate)
+        .toNumber();
+
+      // Determine claimable vs non-claimable amounts
+      const claimablePercentage = await this.getClaimablePercentage(params.productType);
+      const claimableAmount = totalUppfLevy * claimablePercentage;
+      const nonClaimableAmount = totalUppfLevy - claimableAmount;
+
+      // Create detailed calculation breakdown
+      const calculationBreakdown = {
+        baseCalculation: {
+          volumeLitres: params.volumeLitres,
+          baseRate: baseUppfRate,
+          baseAmount: params.volumeLitres * baseUppfRate,
+        },
+        adjustments: {
+          routeComplexity: {
+            factor: adjustmentFactors.routeComplexity,
+            amount: (adjustmentFactors.routeComplexity - 1) * params.volumeLitres * baseUppfRate,
+          },
+          productCategory: {
+            factor: adjustmentFactors.productCategory,
+            amount: (adjustmentFactors.productCategory - 1) * params.volumeLitres * baseUppfRate,
+          },
+          volumeTier: {
+            factor: adjustmentFactors.volumeTier,
+            amount: (adjustmentFactors.volumeTier - 1) * params.volumeLitres * baseUppfRate,
+          },
+          complianceBonus: {
+            factor: adjustmentFactors.complianceBonus,
+            amount: adjustmentFactors.complianceBonus * params.volumeLitres * baseUppfRate,
+          },
+        },
+        finalCalculation: {
+          adjustedRate: adjustedUppfRate,
+          totalLevy: totalUppfLevy,
+          claimablePercentage,
+          claimableAmount,
+          nonClaimableAmount,
+        },
+      };
+
+      const result: UPPFLevyCalculation = {
+        productType: params.productType,
+        volumeLitres: params.volumeLitres,
+        baseUppfRate,
+        adjustedUppfRate,
+        adjustmentFactors,
+        totalUppfLevy,
+        claimableAmount,
+        nonClaimableAmount,
+        calculationBreakdown,
+      };
+
+      // Emit calculation event for analytics
+      this.eventEmitter.emit('uppf.levy.calculated', {
+        ...result,
+        calculationDate: new Date(),
+        pricingWindow: uppfComponent.componentId,
+      });
+
+      this.logger.log(`UPPF levy calculated: Total ${totalUppfLevy.toFixed(4)}, Claimable ${claimableAmount.toFixed(4)}`);
+      return result;
+
+    } catch (error) {
+      this.logger.error(`UPPF levy calculation failed:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate comprehensive price build-up with UPPF integration
+   */
+  async generatePriceBuildup(params: {
+    productType: string;
+    pricingWindow?: string;
+    includeProjections?: boolean;
+    validationLevel?: 'BASIC' | 'ENHANCED' | 'COMPREHENSIVE';
+  }): Promise<PriceBuildup> {
+    this.logger.log(`Generating price build-up for ${params.productType}`);
+
+    try {
+      // Get current pricing window or use active one
+      const pricingWindow = params.pricingWindow || await this.getActivePricingWindow();
+      
+      // Get all pricing components
+      const components = await this.getAllPricingComponents(params.productType, pricingWindow);
+      
+      // Get UPPF component specifically
+      const uppfComponent = components.find(c => c.componentType === 'FUND' && c.componentName.includes('UPPF'));
+      
+      if (!uppfComponent) {
+        throw new BadRequestException('UPPF component not found in pricing structure');
+      }
+
+      // Calculate base price (ex-refinery)
+      const basePrice = await this.getBasePrice(params.productType, pricingWindow);
+      
+      // Build price components
+      const priceBuildupComponents: PriceBuildupComponent[] = [];
+      let totalPrice = basePrice;
+
+      for (const component of components) {
+        const componentAmount = await this.calculateComponentAmount(component, basePrice);
+        
+        priceBuildupComponents.push({
+          componentCode: component.componentId,
+          componentName: component.componentName,
+          amount: componentAmount,
+          calculationBasis: component.calculationMethod,
+          sourceDocument: `NPA-PRICING-${pricingWindow}`,
+          approvalReference: component.npaApproved ? 'NPA-APPROVED' : 'PENDING',
+        });
+        
+        totalPrice += componentAmount;
+      }
+
+      // Get dealer and OMC margins
+      const dealerMargin = await this.getDealerMargin(params.productType, pricingWindow);
+      const omcMargin = await this.getOMCMargin(params.productType, pricingWindow);
+      
+      totalPrice += dealerMargin + omcMargin;
+
+      // Calculate variance from previous pricing window
+      const previousPrice = await this.getPreviousPrice(params.productType);
+      const varianceFromPrevious = previousPrice ? 
+        ((totalPrice - previousPrice) / previousPrice) * 100 : 0;
+
+      // Validate pricing if required
+      if (params.validationLevel && params.validationLevel !== 'BASIC') {
+        await this.validatePriceBuildup({
+          productType: params.productType,
+          totalPrice,
+          components: priceBuildupComponents,
+          varianceFromPrevious,
+        }, params.validationLevel);
+      }
+
+      const priceBuildup: PriceBuildup = {
+        productType: params.productType,
+        pricingWindow,
+        basePrice,
+        components: priceBuildupComponents,
+        totalPrice,
+        uppfComponent,
+        dealerMargin,
+        omcMargin,
+        calculationDate: new Date(),
+        approvalStatus: this.determineApprovalStatus(priceBuildupComponents),
+        varianceFromPrevious,
+      };
+
+      // Store price build-up for audit trail
+      await this.storePriceBuildup(priceBuildup);
+
+      // Emit price build-up event
+      this.eventEmitter.emit('pricing.buildup.generated', {
+        productType: params.productType,
+        pricingWindow,
+        totalPrice,
+        uppfAmount: uppfComponent.baseRate,
+        varianceFromPrevious,
+      });
+
+      this.logger.log(`Price build-up generated for ${params.productType}: GHS ${totalPrice.toFixed(4)}`);
+      return priceBuildup;
+
+    } catch (error) {
+      this.logger.error(`Price build-up generation failed:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Automatically sync UPPF rates from NPA data sources
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_6AM)
+  async syncUPPFRatesFromNPA(): Promise<void> {
+    if (!this.pricingIntegration.enabled) {
+      this.logger.log('Automatic UPPF rate sync is disabled');
+      return;
+    }
+
+    this.logger.log('Syncing UPPF rates from NPA data sources');
+
+    try {
+      // Fetch latest NPA pricing data
+      const npaData = await this.fetchNPAPricingData();
+      
+      if (!npaData || !npaData.uppfRates) {
+        throw new Error('No UPPF rate data received from NPA');
+      }
+
+      // Validate received data
+      const validationResult = await this.validateNPAData(npaData);
+      
+      if (!validationResult.isValid) {
+        throw new Error(`NPA data validation failed: ${validationResult.errors.join(', ')}`);
+      }
+
+      // Update UPPF components
+      for (const productType of Object.keys(npaData.uppfRates)) {
+        const newRate = npaData.uppfRates[productType];
+        await this.updateUPPFComponent(productType, newRate, {
+          sourceDocument: npaData.sourceDocument,
+          effectiveDate: npaData.effectiveDate,
+          approvalReference: npaData.approvalReference,
+        });
+      }
+
+      // Generate change summary
+      const changeSummary = await this.generateRateChangeSummary(npaData);
+      
+      // Check alert thresholds
+      await this.checkAlertThresholds(changeSummary);
+
+      // Emit sync completion event
+      this.eventEmitter.emit('uppf.rates.synced', {
+        source: 'NPA',
+        changesApplied: changeSummary.totalChanges,
+        effectiveDate: npaData.effectiveDate,
+        syncDate: new Date(),
+      });
+
+      this.logger.log(`UPPF rates synchronized successfully: ${changeSummary.totalChanges} changes applied`);
+
+    } catch (error) {
+      this.logger.error('UPPF rate synchronization failed:', error);
+      
+      // Apply fallback mechanism
+      await this.applyFallbackMechanism(error);
+      
+      // Notify stakeholders
+      await this.notifySyncFailure(error);
+    }
+  }
+
+  /**
+   * Create a new UPPF claim with automatic calculation (Enhanced)
    */
   async createUppfClaim(dto: CreateUppfClaimDto): Promise<UppfClaim> {
     this.logger.log(`Creating UPPF claim for consignment: ${dto.consignmentId}`);
@@ -527,8 +1000,10 @@ export class UppfClaimsService {
   }
 
   private generateUUID(): string {
-    // Mock UUID generation
-    return 'uuid-' + Math.random().toString(36).substr(2, 9);
+    // Enhanced UUID generation with timestamp prefix
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substr(2, 9);
+    return `${timestamp}-${random}`;
   }
 
   private async saveClaim(claim: UppfClaim): Promise<UppfClaim> {
@@ -618,5 +1093,360 @@ export class UppfClaimsService {
   private formatClaimForReport(claim: UppfClaim): any {
     // Mock implementation - would format claim data for report
     return claim;
+  }
+
+  // Enhanced pricing integration helper methods
+
+  private async getCurrentUPPFComponent(productType: string, pricingWindow?: string): Promise<UPPFPricingComponent | null> {
+    try {
+      const window = pricingWindow || await this.getActivePricingWindow();
+      
+      // Mock implementation - would fetch from pricing components table
+      return {
+        componentId: `UPPF-${productType}-${window}`,
+        componentName: `UPPF Levy - ${productType}`,
+        componentType: 'FUND',
+        calculationMethod: 'PER_LITRE',
+        baseRate: this.UPPF_PRICING_CONFIG.BASE_RATES[productType] || 0,
+        adjustmentFactors: [],
+        applicableProducts: [productType],
+        geographicScope: ['NATIONAL'],
+        effectiveDate: new Date(),
+        npaApproved: true,
+        lastReviewDate: subDays(new Date(), 30),
+        nextReviewDate: addDays(new Date(), 60),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get UPPF component for ${productType}:`, error);
+      return null;
+    }
+  }
+
+  private calculateVolumeTierFactor(volumeLitres: number): number {
+    if (volumeLitres >= 50000) return this.UPPF_PRICING_CONFIG.ADJUSTMENT_FACTORS.VOLUME_TIER.LARGE;
+    if (volumeLitres >= 20000) return this.UPPF_PRICING_CONFIG.ADJUSTMENT_FACTORS.VOLUME_TIER.MEDIUM;
+    return this.UPPF_PRICING_CONFIG.ADJUSTMENT_FACTORS.VOLUME_TIER.SMALL;
+  }
+
+  private async calculateComplianceBonus(params: any): Promise<number> {
+    // Calculate compliance bonus based on historical performance
+    try {
+      const complianceScore = await this.getComplianceScore(params);
+      return complianceScore > 95 ? 0.05 : complianceScore > 90 ? 0.02 : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private async getClaimablePercentage(productType: string): Promise<number> {
+    // Get percentage of UPPF levy that is claimable
+    const claimableRates = {
+      'PMS': 1.0,      // 100% claimable
+      'AGO': 1.0,      // 100% claimable
+      'KEROSENE': 0.8, // 80% claimable
+      'LPG': 0.0,      // Not claimable
+    };
+    
+    return claimableRates[productType] || 0;
+  }
+
+  private async getActivePricingWindow(): Promise<string> {
+    const now = new Date();
+    return `W${now.getFullYear()}-${String(Math.ceil((now.getMonth() + 1) / 0.5)).padStart(2, '0')}`;
+  }
+
+  private async getAllPricingComponents(productType: string, pricingWindow: string): Promise<UPPFPricingComponent[]> {
+    // Mock implementation - would fetch all pricing components
+    return [
+      {
+        componentId: 'EXREF-001',
+        componentName: 'Ex-Refinery Price',
+        componentType: 'LEVY',
+        calculationMethod: 'PER_LITRE',
+        baseRate: 8.50,
+        adjustmentFactors: [],
+        applicableProducts: [productType],
+        geographicScope: ['NATIONAL'],
+        effectiveDate: new Date(),
+        npaApproved: true,
+        lastReviewDate: new Date(),
+        nextReviewDate: addDays(new Date(), 30),
+      },
+      {
+        componentId: 'UPPF-001',
+        componentName: 'UPPF Levy',
+        componentType: 'FUND',
+        calculationMethod: 'PER_LITRE',
+        baseRate: this.UPPF_PRICING_CONFIG.BASE_RATES[productType] || 0,
+        adjustmentFactors: [],
+        applicableProducts: [productType],
+        geographicScope: ['NATIONAL'],
+        effectiveDate: new Date(),
+        npaApproved: true,
+        lastReviewDate: new Date(),
+        nextReviewDate: addDays(new Date(), 30),
+      },
+    ];
+  }
+
+  private async getBasePrice(productType: string, pricingWindow: string): Promise<number> {
+    // Get ex-refinery or import-parity price
+    const basePrices = {
+      'PMS': 8.50,
+      'AGO': 8.20,
+      'KEROSENE': 7.80,
+      'LPG': 6.50,
+    };
+    
+    return basePrices[productType] || 0;
+  }
+
+  private async calculateComponentAmount(component: UPPFPricingComponent, basePrice: number): Promise<number> {
+    switch (component.calculationMethod) {
+      case 'PER_LITRE':
+        return component.baseRate;
+      case 'PERCENTAGE':
+        return basePrice * (component.baseRate / 100);
+      case 'FIXED':
+        return component.baseRate;
+      default:
+        return 0;
+    }
+  }
+
+  private async getDealerMargin(productType: string, pricingWindow: string): Promise<number> {
+    const dealerMargins = {
+      'PMS': 0.35,
+      'AGO': 0.35,
+      'KEROSENE': 0.30,
+      'LPG': 0.40,
+    };
+    
+    return dealerMargins[productType] || 0;
+  }
+
+  private async getOMCMargin(productType: string, pricingWindow: string): Promise<number> {
+    const omcMargins = {
+      'PMS': 0.30,
+      'AGO': 0.30,
+      'KEROSENE': 0.25,
+      'LPG': 0.35,
+    };
+    
+    return omcMargins[productType] || 0;
+  }
+
+  private async getPreviousPrice(productType: string): Promise<number | null> {
+    // Get previous pricing window price for comparison
+    const previousPrices = {
+      'PMS': 14.20,
+      'AGO': 14.10,
+      'KEROSENE': 13.50,
+      'LPG': 12.80,
+    };
+    
+    return previousPrices[productType] || null;
+  }
+
+  private async validatePriceBuildup(priceData: any, validationLevel: string): Promise<void> {
+    // Apply validation rules based on level
+    for (const rule of this.pricingIntegration.validationRules) {
+      const result = await this.applyPricingValidationRule(priceData, rule);
+      
+      if (!result.passed && rule.severity === 'ERROR') {
+        throw new BadRequestException(`Pricing validation failed: ${result.message}`);
+      }
+      
+      if (!result.passed && rule.severity === 'WARNING') {
+        this.logger.warn(`Pricing validation warning: ${result.message}`);
+      }
+    }
+  }
+
+  private async applyPricingValidationRule(priceData: any, rule: PricingValidationRule): Promise<{ passed: boolean; message: string }> {
+    switch (rule.ruleType) {
+      case 'VARIANCE_CHECK':
+        if (Math.abs(priceData.varianceFromPrevious) > rule.parameters.maxVariancePercent) {
+          return {
+            passed: false,
+            message: `Price variance ${priceData.varianceFromPrevious.toFixed(2)}% exceeds threshold ${rule.parameters.maxVariancePercent}%`,
+          };
+        }
+        break;
+      
+      case 'APPROVAL_REQUIRED':
+        const uppfComponent = priceData.components.find(c => c.componentName.includes('UPPF'));
+        if (uppfComponent && Math.abs(uppfComponent.amount - this.UPPF_PRICING_CONFIG.BASE_RATES[priceData.productType]) > rule.parameters.thresholdAmount) {
+          return {
+            passed: false,
+            message: 'UPPF rate change requires NPA approval',
+          };
+        }
+        break;
+    }
+    
+    return { passed: true, message: 'Validation passed' };
+  }
+
+  private determineApprovalStatus(components: PriceBuildupComponent[]): string {
+    const hasUnapproved = components.some(c => c.approvalReference === 'PENDING');
+    return hasUnapproved ? 'PENDING_APPROVAL' : 'APPROVED';
+  }
+
+  private async storePriceBuildup(priceBuildup: PriceBuildup): Promise<void> {
+    // Store price build-up for audit trail
+    this.eventEmitter.emit('pricing.buildup.stored', {
+      id: `PBU-${Date.now()}`,
+      ...priceBuildup,
+    });
+  }
+
+  private async fetchNPAPricingData(): Promise<any> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(this.pricingIntegration.npaDataSource, {
+          timeout: 30000,
+          headers: {
+            'User-Agent': 'OMC-ERP-System/1.0',
+            'Accept': 'application/json',
+          },
+        })
+      );
+      
+      return response.data;
+    } catch (error) {
+      this.logger.error('Failed to fetch NPA pricing data:', error);
+      throw new Error('NPA data source unavailable');
+    }
+  }
+
+  private async validateNPAData(npaData: any): Promise<{ isValid: boolean; errors: string[] }> {
+    const errors: string[] = [];
+    
+    if (!npaData.uppfRates) {
+      errors.push('Missing UPPF rates in NPA data');
+    }
+    
+    if (!npaData.effectiveDate) {
+      errors.push('Missing effective date in NPA data');
+    }
+    
+    if (npaData.uppfRates) {
+      for (const [product, rate] of Object.entries(npaData.uppfRates)) {
+        if (typeof rate !== 'number' || rate < 0) {
+          errors.push(`Invalid UPPF rate for ${product}: ${rate}`);
+        }
+      }
+    }
+    
+    return {
+      isValid: errors.length === 0,
+      errors,
+    };
+  }
+
+  private async updateUPPFComponent(productType: string, newRate: number, metadata: any): Promise<void> {
+    // Update UPPF component with new rate
+    this.eventEmitter.emit('uppf.component.updated', {
+      productType,
+      oldRate: this.UPPF_PRICING_CONFIG.BASE_RATES[productType],
+      newRate,
+      metadata,
+      updateDate: new Date(),
+    });
+    
+    // Update local configuration
+    this.UPPF_PRICING_CONFIG.BASE_RATES[productType] = newRate;
+  }
+
+  private async generateRateChangeSummary(npaData: any): Promise<{ totalChanges: number; changes: any[] }> {
+    const changes = [];
+    
+    for (const [product, newRate] of Object.entries(npaData.uppfRates)) {
+      const oldRate = this.UPPF_PRICING_CONFIG.BASE_RATES[product];
+      if (oldRate !== newRate) {
+        changes.push({
+          product,
+          oldRate,
+          newRate,
+          variance: ((newRate as number - oldRate) / oldRate) * 100,
+        });
+      }
+    }
+    
+    return {
+      totalChanges: changes.length,
+      changes,
+    };
+  }
+
+  private async checkAlertThresholds(changeSummary: any): Promise<void> {
+    for (const change of changeSummary.changes) {
+      for (const threshold of this.pricingIntegration.alertThresholds) {
+        let shouldAlert = false;
+        
+        switch (threshold.thresholdType) {
+          case 'VARIANCE_PERCENT':
+            shouldAlert = Math.abs(change.variance) > threshold.thresholdValue;
+            break;
+          case 'ABSOLUTE_CHANGE':
+            shouldAlert = Math.abs(change.newRate - change.oldRate) > threshold.thresholdValue;
+            break;
+        }
+        
+        if (shouldAlert) {
+          await this.triggerAlert(threshold, change);
+        }
+      }
+    }
+  }
+
+  private async triggerAlert(threshold: PricingAlertThreshold, change: any): Promise<void> {
+    this.eventEmitter.emit('pricing.alert.triggered', {
+      alertLevel: threshold.alertLevel,
+      thresholdType: threshold.thresholdType,
+      change,
+      notificationChannels: threshold.notificationChannels,
+      timestamp: new Date(),
+    });
+  }
+
+  private async applyFallbackMechanism(error: any): Promise<void> {
+    this.logger.log('Applying fallback mechanism for UPPF rate sync failure');
+    
+    if (this.pricingIntegration.fallbackMechanism.useHistoricalData) {
+      await this.useHistoricalRates();
+    }
+    
+    if (this.pricingIntegration.fallbackMechanism.manualOverride) {
+      await this.requestManualIntervention(error);
+    }
+  }
+
+  private async useHistoricalRates(): Promise<void> {
+    // Use historical rates as fallback
+    this.logger.log('Using historical UPPF rates as fallback');
+  }
+
+  private async requestManualIntervention(error: any): Promise<void> {
+    // Request manual intervention
+    this.eventEmitter.emit('pricing.manual_intervention.required', {
+      error: error.message,
+      contacts: this.pricingIntegration.fallbackMechanism.emergencyContact,
+      timestamp: new Date(),
+    });
+  }
+
+  private async notifySyncFailure(error: any): Promise<void> {
+    this.eventEmitter.emit('uppf.sync.failure', {
+      error: error.message,
+      timestamp: new Date(),
+      fallbackApplied: true,
+    });
+  }
+
+  private async getComplianceScore(params: any): Promise<number> {
+    // Calculate compliance score based on historical performance
+    return 95; // Mock implementation
   }
 }

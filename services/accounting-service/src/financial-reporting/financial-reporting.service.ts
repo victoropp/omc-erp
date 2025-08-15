@@ -297,11 +297,32 @@ export interface FinancialRatios {
 @Injectable()
 export class FinancialReportingService {
   private readonly logger = new Logger(FinancialReportingService.name);
+  private readonly realtimeCache = new Map();
 
   constructor(
     private dataSource: DataSource,
     private eventEmitter: EventEmitter2,
-  ) {}
+  ) {
+    // Initialize real-time update listeners
+    this.initializeRealtimeListeners();
+  }
+
+  /**
+   * Initialize real-time event listeners for dashboard updates
+   */
+  private initializeRealtimeListeners(): void {
+    this.eventEmitter.on('journal.entries.created', (data) => {
+      this.updateRealtimeDashboardMetrics(data);
+    });
+    
+    this.eventEmitter.on('tax.reconciliation.updated', (data) => {
+      this.updateTaxReconciliationMetrics(data);
+    });
+    
+    this.eventEmitter.on('delivery.journal_entries.created', (data) => {
+      this.updateDeliveryMetrics(data);
+    });
+  }
 
   // ===== BALANCE SHEET =====
 
@@ -828,6 +849,235 @@ export class FinancialReportingService {
     } catch (error) {
       this.logger.error(`Failed to calculate financial ratios for tenant ${tenantId}:`, error);
       throw error;
+    }
+  }
+
+  // ===== REAL-TIME DASHBOARD UPDATES =====
+
+  /**
+   * Update real-time dashboard metrics when journal entries are created
+   */
+  async updateRealtimeDashboardMetrics(data: {
+    deliveryId: string;
+    journalEntries: any[];
+    stationType: string;
+    totalValue: number;
+    timestamp: Date;
+  }): Promise<void> {
+    try {
+      // Update cached metrics
+      const currentMetrics = this.realtimeCache.get('dashboard_metrics') || {
+        totalRevenue: 0,
+        totalCosts: 0,
+        taxAccruals: 0,
+        grossProfit: 0,
+        deliveryCount: 0,
+      };
+
+      // Update based on station type and journal entries
+      if (data.stationType === 'DODO' || data.stationType === 'OTHER') {
+        currentMetrics.totalRevenue += data.totalValue;
+        currentMetrics.deliveryCount += 1;
+      } else {
+        currentMetrics.totalCosts += data.totalValue;
+      }
+
+      // Update tax accruals from journal entries
+      const taxAccrualEntry = data.journalEntries.find(entry => entry.journalType === 'TAX_ACCRUAL');
+      if (taxAccrualEntry) {
+        const taxAmount = taxAccrualEntry.lines
+          .filter(line => line.creditAmount > 0)
+          .reduce((sum, line) => sum + line.creditAmount, 0);
+        currentMetrics.taxAccruals += taxAmount;
+      }
+
+      currentMetrics.grossProfit = currentMetrics.totalRevenue - currentMetrics.totalCosts;
+
+      this.realtimeCache.set('dashboard_metrics', currentMetrics);
+
+      // Emit real-time update event
+      this.eventEmitter.emit('dashboard.metrics.updated', {
+        metrics: currentMetrics,
+        lastUpdated: new Date(),
+        triggerSource: 'journal_entry_created',
+      });
+
+      this.logger.log('Real-time dashboard metrics updated');
+
+    } catch (error) {
+      this.logger.error('Failed to update real-time dashboard metrics:', error);
+    }
+  }
+
+  /**
+   * Update tax reconciliation metrics
+   */
+  async updateTaxReconciliationMetrics(data: {
+    taxType: string;
+    paidAmount: number;
+    paymentDate: Date;
+  }): Promise<void> {
+    try {
+      const taxReconciliation = this.realtimeCache.get('tax_reconciliation') || {};
+      
+      if (!taxReconciliation[data.taxType]) {
+        taxReconciliation[data.taxType] = {
+          accrued: 0,
+          paid: 0,
+          outstanding: 0,
+        };
+      }
+
+      taxReconciliation[data.taxType].paid += data.paidAmount;
+      taxReconciliation[data.taxType].outstanding = 
+        taxReconciliation[data.taxType].accrued - taxReconciliation[data.taxType].paid;
+
+      this.realtimeCache.set('tax_reconciliation', taxReconciliation);
+
+      // Emit tax reconciliation update
+      this.eventEmitter.emit('tax.reconciliation.dashboard.updated', {
+        taxType: data.taxType,
+        reconciliation: taxReconciliation[data.taxType],
+        lastUpdated: new Date(),
+      });
+
+    } catch (error) {
+      this.logger.error('Failed to update tax reconciliation metrics:', error);
+    }
+  }
+
+  /**
+   * Update delivery-based metrics
+   */
+  async updateDeliveryMetrics(data: {
+    deliveryId: string;
+    stationType: string;
+    totalValue: number;
+  }): Promise<void> {
+    try {
+      const deliveryMetrics = this.realtimeCache.get('delivery_metrics') || {
+        byStationType: {},
+        dailyVolume: 0,
+        dailyValue: 0,
+      };
+
+      if (!deliveryMetrics.byStationType[data.stationType]) {
+        deliveryMetrics.byStationType[data.stationType] = {
+          count: 0,
+          totalValue: 0,
+        };
+      }
+
+      deliveryMetrics.byStationType[data.stationType].count += 1;
+      deliveryMetrics.byStationType[data.stationType].totalValue += data.totalValue;
+      deliveryMetrics.dailyValue += data.totalValue;
+
+      this.realtimeCache.set('delivery_metrics', deliveryMetrics);
+
+      // Emit delivery metrics update
+      this.eventEmitter.emit('delivery.metrics.updated', {
+        metrics: deliveryMetrics,
+        lastUpdated: new Date(),
+      });
+
+    } catch (error) {
+      this.logger.error('Failed to update delivery metrics:', error);
+    }
+  }
+
+  /**
+   * Get real-time dashboard data
+   */
+  async getRealtimeDashboardData(): Promise<{
+    dashboardMetrics: any;
+    taxReconciliation: any;
+    deliveryMetrics: any;
+    lastUpdated: Date;
+  }> {
+    return {
+      dashboardMetrics: this.realtimeCache.get('dashboard_metrics') || {},
+      taxReconciliation: this.realtimeCache.get('tax_reconciliation') || {},
+      deliveryMetrics: this.realtimeCache.get('delivery_metrics') || {},
+      lastUpdated: new Date(),
+    };
+  }
+
+  /**
+   * Generate enhanced trial balance with tax reconciliation
+   */
+  async generateEnhancedTrialBalance(
+    periodId: string,
+    includeTaxReconciliation: boolean = true
+  ): Promise<TrialBalanceData[]> {
+    try {
+      const baseTrialBalance = await this.generateTrialBalance(periodId);
+
+      if (!includeTaxReconciliation) {
+        return baseTrialBalance;
+      }
+
+      // Enhance with tax reconciliation data
+      const enhancedTrialBalance = await Promise.all(
+        baseTrialBalance.map(async (account) => {
+          if (this.isTaxAccount(account.accountCode)) {
+            const reconciliationData = await this.getTaxReconciliationForAccount(
+              account.accountCode,
+              periodId
+            );
+            return {
+              ...account,
+              taxAccruals: reconciliationData.accrued,
+              taxPayments: reconciliationData.paid,
+              netTaxPosition: reconciliationData.accrued - reconciliationData.paid,
+            };
+          }
+          return account;
+        })
+      );
+
+      return enhancedTrialBalance;
+
+    } catch (error) {
+      this.logger.error('Failed to generate enhanced trial balance:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if account is a tax account
+   */
+  private isTaxAccount(accountCode: string): boolean {
+    const taxAccountPrefixes = ['2210', '2220', '2230', '2240', '2250', '2260', '2270', '5100', '5110', '5120', '5130', '5140', '5150', '5200'];
+    return taxAccountPrefixes.includes(accountCode);
+  }
+
+  /**
+   * Get tax reconciliation data for specific account
+   */
+  private async getTaxReconciliationForAccount(
+    accountCode: string,
+    periodId: string
+  ): Promise<{ accrued: number; paid: number }> {
+    try {
+      const result = await this.dataSource.query(
+        `SELECT 
+          SUM(CASE WHEN jel.credit_amount > 0 THEN jel.credit_amount ELSE 0 END) as accrued,
+          SUM(CASE WHEN jel.debit_amount > 0 THEN jel.debit_amount ELSE 0 END) as paid
+        FROM journal_entry_lines jel
+        JOIN journal_entries je ON je.id = jel.journal_entry_id
+        WHERE jel.account_code = $1
+        AND je.period_id = $2
+        AND je.status = 'POSTED'`,
+        [accountCode, periodId]
+      );
+
+      return {
+        accrued: parseFloat(result[0]?.accrued || 0),
+        paid: parseFloat(result[0]?.paid || 0),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get tax reconciliation for account ${accountCode}:`, error);
+      return { accrued: 0, paid: 0 };
     }
   }
 

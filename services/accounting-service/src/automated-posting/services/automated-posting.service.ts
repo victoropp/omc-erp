@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 
 // Entities
 import { JournalEntryTemplate } from '../entities/journal-entry-template.entity';
@@ -59,6 +61,7 @@ export class AutomatedPostingService {
     private journalLineRepository: Repository<JournalEntryLine>,
     private dataSource: DataSource,
     private eventEmitter: EventEmitter2,
+    private httpService: HttpService,
     private templateService: TransactionTemplateService,
     private ruleEngine: PostingRuleEngine,
     private ifrsService: IFRSComplianceService,
@@ -380,6 +383,22 @@ export class AutomatedPostingService {
   /**
    * Event handlers for real-time processing
    */
+  @OnEvent('delivery.completed')
+  async handleDeliveryCompleted(payload: any) {
+    const event: TransactionEvent = {
+      eventType: 'delivery.completed',
+      transactionType: 'DAILY_DELIVERY',
+      sourceDocumentType: 'DAILY_DELIVERY',
+      sourceDocumentId: payload.deliveryId,
+      transactionData: payload,
+      stationId: payload.stationId,
+      customerId: payload.customerId,
+      timestamp: new Date(),
+    };
+
+    await this.processTransaction(event);
+  }
+
   @OnEvent('fuel.transaction.completed')
   async handleFuelTransaction(payload: any) {
     const event: TransactionEvent = {
@@ -504,4 +523,9 @@ export class AutomatedPostingService {
       }
     }
   }
-}
+
+  /**\n   * Process delivery journal entries automatically\n   */\n  @OnEvent('delivery.ready_for_accounting')\n  async processDeliveryJournalEntries(payload: {\n    deliveryId: string;\n    stationType: 'COCO' | 'DOCO' | 'DODO' | 'OTHER';\n    productType: string;\n    quantity: number;\n    unitPrice: number;\n    totalValue: number;\n    supplierId?: string;\n    customerId?: string;\n    stationId: string;\n    taxBreakdown: {\n      petroleumTax: number;\n      energyFundLevy: number;\n      roadFundLevy: number;\n      priceStabilizationLevy: number;\n      uppfLevy: number;\n      vat: number;\n      customsDuty: number;\n    };\n    margins?: {\n      primaryDistribution: number;\n      marketing: number;\n      dealer: number;\n    };\n    deliveryDate: Date;\n    tenantId: string;\n  }) {\n    this.logger.log(`Processing automatic journal entries for delivery ${payload.deliveryId}`);\n\n    try {\n      // Use GeneralLedgerService to create delivery-specific journal entries\n      const response = await firstValueFrom(\n        this.httpService.post('/general-ledger/delivery-journal-entry', payload)\n      );\n\n      this.logger.log(`Created journal entries for delivery ${payload.deliveryId}: ${response.data.length} entries`);\n\n      // Emit event for financial reporting updates\n      this.eventEmitter.emit('journal.entries.created', {\n        deliveryId: payload.deliveryId,\n        journalEntries: response.data,\n        stationType: payload.stationType,\n        totalValue: payload.totalValue,\n        timestamp: new Date(),\n      });\n\n    } catch (error) {\n      this.logger.error(`Failed to process journal entries for delivery ${payload.deliveryId}:`, error);\n      \n      // Emit error event for monitoring\n      this.eventEmitter.emit('journal.entries.failed', {\n        deliveryId: payload.deliveryId,\n        error: error.message,\n        timestamp: new Date(),\n      });\n    }\n  }\n\n  /**\n   * Process tax reconciliation entries\n   */\n  @OnEvent('tax.payment.completed')\n  async processTaxPaymentReconciliation(payload: {\n    paymentId: string;\n    taxType: string;\n    paidAmount: number;\n    paymentDate: Date;\n    tenantId: string;\n    payeeEntity: string;\n  }) {\n    this.logger.log(`Processing tax payment reconciliation for ${payload.taxType}`);\n\n    try {\n      const reconciliationEntry = {\n        journalDate: payload.paymentDate,\n        description: `Tax Payment - ${payload.taxType}`,\n        journalType: 'TAX_PAYMENT',\n        sourceModule: 'TAX_MANAGEMENT',\n        sourceDocumentType: 'TAX_PAYMENT',\n        sourceDocumentId: payload.paymentId,\n        lines: [\n          {\n            accountCode: this.getTaxPayableAccount(payload.taxType),\n            description: `${payload.taxType} Payment`,\n            debitAmount: payload.paidAmount,\n            creditAmount: 0,\n          },\n          {\n            accountCode: '1010', // Cash/Bank\n            description: `Payment to ${payload.payeeEntity}`,\n            debitAmount: 0,\n            creditAmount: payload.paidAmount,\n          },\n        ],\n      };\n\n      const event: TransactionEvent = {\n        eventType: 'tax.payment.completed',\n        transactionType: 'TAX_PAYMENT',\n        sourceDocumentType: 'TAX_PAYMENT',\n        sourceDocumentId: payload.paymentId,\n        transactionData: reconciliationEntry,\n        timestamp: new Date(),\n      };\n\n      await this.processTransaction(event);\n\n      // Emit reconciliation update event\n      this.eventEmitter.emit('tax.reconciliation.updated', {\n        taxType: payload.taxType,\n        paidAmount: payload.paidAmount,\n        paymentDate: payload.paymentDate,\n      });\n\n    } catch (error) {\n      this.logger.error(`Failed to process tax payment reconciliation:`, error);\n    }\n  }\n\n  /**\n   * Get tax payable account by tax type\n   */\n  private getTaxPayableAccount(taxType: string): string {\n    const accountMap = {\n      'PETROLEUM_TAX': '2220',\n      'ENERGY_FUND_LEVY': '2230',\n      'ROAD_FUND_LEVY': '2240',\n      'PRICE_STABILIZATION_LEVY': '2260',\n      'UPPF_LEVY': '2250',\n      'VAT': '2210',\n      'CUSTOMS_DUTY': '2270',\n    };\n    return accountMap[taxType] || '2200'; // General Tax Payable\n  }
+
+  /**
+   * Generate trial balance with tax reconciliation data
+   */\n  async generateEnhancedTrialBalance(periodId: string): Promise<any> {\n    try {\n      const response = await firstValueFrom(\n        this.httpService.get(`/general-ledger/trial-balance/${periodId}?includeTaxReconciliation=true`)\n      );\n\n      const trialBalance = response.data;\n\n      // Emit event for dashboard updates\n      this.eventEmitter.emit('trial.balance.generated', {\n        periodId,\n        trialBalance,\n        generatedAt: new Date(),\n      });\n\n      return trialBalance;\n\n    } catch (error) {\n      this.logger.error('Failed to generate enhanced trial balance:', error);\n      throw error;\n    }\n  }\n}

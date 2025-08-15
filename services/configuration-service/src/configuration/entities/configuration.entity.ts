@@ -117,6 +117,8 @@ export enum ConfigurationModule {
   PRICING_BUILDUP = 'PRICING_BUILDUP',
   DEALER_MANAGEMENT = 'DEALER_MANAGEMENT',
   AUTOMATED_POSTING = 'AUTOMATED_POSTING',
+  STATION_CONFIGURATION = 'STATION_CONFIGURATION',
+  PRICE_COMPONENTS = 'PRICE_COMPONENTS',
 }
 
 @Entity('configurations')
@@ -463,5 +465,22 @@ export class Configuration {
       default:
         return value;
     }
+  }
+
+  // Helper method to check if configuration is currently effective
+  isEffective(date: Date = new Date()): boolean {
+    if (this.status !== ConfigurationStatus.ACTIVE || !this.isActive) {
+      return false;
+    }
+    
+    if (this.effectiveDate && this.effectiveDate > date) {
+      return false;
+    }
+    
+    if (this.expiryDate && this.expiryDate <= date) {
+      return false;
+    }
+    
+    return true;
   }
 }
