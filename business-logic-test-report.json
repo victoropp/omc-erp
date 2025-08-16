@@ -1,0 +1,57 @@
+{
+  "summary": {
+    "total": 4,
+    "passed": 0,
+    "failed": 4,
+    "warnings": 0,
+    "coverage": 0,
+    "startTime": "2025-08-16T10:48:38.158Z",
+    "endTime": "2025-08-16T10:48:44.277Z",
+    "duration": 6119
+  },
+  "workflowResults": {},
+  "detailedResults": [
+    {
+      "timestamp": "2025-08-16T10:48:41.238Z",
+      "testName": "Station Service Health Check",
+      "status": "FAILED",
+      "details": {
+        "error": "Request failed with status code 404",
+        "service": "Station Service"
+      },
+      "duration": 0
+    },
+    {
+      "timestamp": "2025-08-16T10:48:41.239Z",
+      "testName": "Station Management Suite",
+      "status": "FAILED",
+      "details": {
+        "error": "Station service is not available"
+      },
+      "duration": 0
+    },
+    {
+      "timestamp": "2025-08-16T10:48:44.277Z",
+      "testName": "Transaction Service Health Check",
+      "status": "FAILED",
+      "details": {
+        "error": "Request failed with status code 404",
+        "service": "Transaction Service"
+      },
+      "duration": 0
+    },
+    {
+      "timestamp": "2025-08-16T10:48:44.277Z",
+      "testName": "Transaction Processing Suite",
+      "status": "FAILED",
+      "details": {
+        "error": "Transaction service is not available"
+      },
+      "duration": 0
+    }
+  ],
+  "performanceMetrics": {},
+  "dataIntegrityChecks": [],
+  "businessRuleValidations": [],
+  "edgeCaseResults": []
+}

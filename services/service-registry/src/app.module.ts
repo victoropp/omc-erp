@@ -7,6 +7,7 @@ import { ServiceDiscoveryModule } from './service-discovery/service-discovery.mo
 import { EventBusModule } from './event-bus/event-bus.module';
 import { WebSocketModule } from './websocket/websocket.module';
 import { CacheModule } from './common/cache.module';
+import { ServiceAuthModule } from './service-auth/service-auth.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { CacheModule } from './common/cache.module';
     // Core modules
     ServiceRegistryModule,
     ServiceDiscoveryModule,
+    ServiceAuthModule,
     HealthCheckModule,
     EventBusModule,
     WebSocketModule,

@@ -262,6 +262,104 @@ export interface ValidationError {
   code?: string;
 }
 
+// Service Authentication Interfaces
+export interface IServiceAuthService {
+  generateApiKey(serviceName: string): Promise<ServiceApiKey>;
+  validateApiKey(apiKey: string): Promise<ServiceIdentity | null>;
+  generateServiceToken(serviceId: string, permissions: string[]): Promise<string>;
+  validateServiceToken(token: string): Promise<ServiceTokenPayload | null>;
+  revokeApiKey(apiKey: string): Promise<void>;
+  refreshServiceToken(token: string): Promise<string>;
+}
+
+export interface ServiceApiKey {
+  id: string;
+  serviceName: string;
+  apiKey: string;
+  hashedKey: string;
+  permissions: string[];
+  rateLimit: {
+    requestsPerMinute: number;
+    burstLimit: number;
+  };
+  isActive: boolean;
+  createdAt: Date;
+  expiresAt?: Date;
+  lastUsedAt?: Date;
+}
+
+export interface ServiceIdentity {
+  id: string;
+  serviceName: string;
+  version: string;
+  environment: string;
+  permissions: string[];
+  metadata: Record<string, any>;
+  isActive: boolean;
+  registeredAt: Date;
+  lastAuthAt: Date;
+}
+
+export interface ServiceTokenPayload {
+  sub: string; // Service ID
+  serviceName: string;
+  permissions: string[];
+  environment: string;
+  iat: number;
+  exp: number;
+  iss: string; // Issuer (service-registry)
+  aud: string; // Audience (target service or 'all')
+}
+
+export interface ServiceAuthRequest {
+  serviceId: string;
+  apiKey: string;
+  targetService?: string;
+  operation?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ServiceAuthResponse {
+  success: boolean;
+  serviceToken?: string;
+  expiresIn?: number;
+  permissions?: string[];
+  error?: string;
+}
+
+export interface InterServiceRequest {
+  serviceToken: string;
+  sourceService: string;
+  targetService: string;
+  operation: string;
+  requestId: string;
+  timestamp: Date;
+  payload?: any;
+}
+
+export interface ServiceRateLimit {
+  serviceId: string;
+  endpoint: string;
+  requestsPerMinute: number;
+  burstLimit: number;
+  currentRequests: number;
+  windowStart: Date;
+  isBlocked: boolean;
+}
+
+export interface ServiceAuthAudit {
+  id: string;
+  serviceId: string;
+  operation: string;
+  success: boolean;
+  error?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  requestId: string;
+  timestamp: Date;
+  metadata?: Record<string, any>;
+}
+
 // Configuration Interfaces
 export interface DatabaseConfig {
   host: string;
@@ -277,6 +375,16 @@ export interface RedisConfig {
   port: number;
   password?: string;
   db?: number;
+}
+
+export interface ServiceSecurityConfig {
+  apiKeyLength: number;
+  tokenExpiry: string;
+  rateLimitWindow: number;
+  maxRequestsPerWindow: number;
+  enableMutualTLS: boolean;
+  trustedCertificates: string[];
+  encryptionAlgorithm: string;
 }
 
 export interface AppConfig {
@@ -299,6 +407,7 @@ export interface AppConfig {
     accessExpiry: string;
     refreshExpiry: string;
   };
+  serviceAuth: ServiceSecurityConfig;
   database: DatabaseConfig;
   redis: RedisConfig;
 }

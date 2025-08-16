@@ -30,17 +30,62 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_NAME || process.env.DATABASE_NAME || 'omc_erp',
   synchronize: false, // Never use true in production
   logging: process.env.NODE_ENV === 'development',
-  // Connection pool configuration
+  // Enhanced connection pool configuration for PostgreSQL
   extra: {
-    connectionLimit: 20,
-    acquireTimeout: 60000,
-    timeout: 60000,
-    reconnect: true,
-    charset: 'utf8mb4_unicode_ci',
+    // Connection pool settings
+    max: 50, // Maximum number of connections in pool
+    min: 10, // Minimum number of connections in pool
+    idle: 10000, // How long a connection is allowed to sit idle
+    acquire: 60000, // Maximum time to wait for a connection
+    evict: 300000, // How often to check for idle connections to destroy
+    
+    // PostgreSQL specific optimizations
+    application_name: 'omc-erp-backend',
+    statement_timeout: '30s',
+    idle_in_transaction_session_timeout: '60s',
+    
+    // Connection reliability
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 0,
   },
   // Connection timeout and retry settings
-  connectTimeoutMS: 10000,
+  connectTimeoutMS: 15000,
   maxQueryExecutionTime: 30000,
+  
+  // Query optimization settings
+  cache: {
+    type: 'redis',
+    options: {
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      password: process.env.REDIS_PASSWORD,
+      db: 1, // Use separate Redis DB for query cache
+    },
+    duration: 300000, // 5 minutes cache duration
+    ignoreErrors: true, // Don't fail queries if cache is down
+  },
+  
+  // Database performance monitoring
+  logging: process.env.NODE_ENV === 'development' ? 'all' : ['error', 'warn', 'migration'],
+  logger: 'advanced-console',
+  
+  // Database pooling for read replicas
+  replication: process.env.DB_READ_HOST ? {
+    master: {
+      host: process.env.DB_HOST || 'localhost',
+      port: parseInt(process.env.DB_PORT || '5432'),
+      username: process.env.DB_USER || 'postgres',
+      password: process.env.DB_PASSWORD || 'postgres',
+      database: process.env.DB_NAME || 'omc_erp',
+    },
+    slaves: [{
+      host: process.env.DB_READ_HOST,
+      port: parseInt(process.env.DB_READ_PORT || '5432'),
+      username: process.env.DB_READ_USER || process.env.DB_USER || 'postgres',
+      password: process.env.DB_READ_PASSWORD || process.env.DB_PASSWORD || 'postgres',
+      database: process.env.DB_READ_NAME || process.env.DB_NAME || 'omc_erp',
+    }]
+  } : undefined,
   entities: [
     User,
     Tenant,

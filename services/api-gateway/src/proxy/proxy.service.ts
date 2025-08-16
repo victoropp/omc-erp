@@ -72,6 +72,9 @@ export class ProxyService {
         this.logger.debug(`Using static service URL: ${service} at ${baseUrl}`);
       }
 
+      // Get service token for authentication
+      const serviceToken = await this.getServiceToken();
+
       const config: AxiosRequestConfig = {
         method,
         url: `${baseUrl}${path}`,
@@ -82,6 +85,8 @@ export class ProxyService {
           'X-Forwarded-For': headers?.['x-forwarded-for'] || headers?.['x-real-ip'],
           'X-Request-ID': requestId,
           'X-Gateway': 'omc-erp-api-gateway',
+          'X-Service-Token': serviceToken,
+          'X-Source-Service': 'api-gateway',
         },
       };
 
@@ -172,6 +177,96 @@ export class ProxyService {
 
   private generateRequestId(): string {
     return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /**
+   * Get or refresh service token for authenticated inter-service calls
+   */
+  private async getServiceToken(): Promise<string> {
+    const cacheKey = 'api_gateway_service_token';
+    
+    try {
+      // Check if we have a cached valid token
+      let cachedToken = await this.cacheManager.get<string>(cacheKey);
+      if (cachedToken) {
+        // Verify token is still valid (not expired)
+        if (this.isTokenValid(cachedToken)) {
+          return cachedToken;
+        }
+        // Remove expired token from cache
+        await this.cacheManager.del(cacheKey);
+      }
+
+      // Get new token from service registry
+      const newToken = await this.authenticateWithServiceRegistry();
+      
+      // Cache the new token (with 50 minutes TTL for 1-hour tokens to allow refresh)
+      await this.cacheManager.set(cacheKey, newToken, 3000000); // 50 minutes
+      
+      return newToken;
+    } catch (error) {
+      this.logger.error('Failed to get service token:', error);
+      // Return empty string - the receiving service should handle missing tokens gracefully
+      return '';
+    }
+  }
+
+  /**
+   * Authenticate with service registry to get a service token
+   */
+  private async authenticateWithServiceRegistry(): Promise<string> {
+    try {
+      const apiKey = this.configService.get<string>('API_GATEWAY_SERVICE_API_KEY');
+      if (!apiKey) {
+        throw new Error('API Gateway service API key not configured');
+      }
+
+      const serviceId = this.configService.get<string>('API_GATEWAY_SERVICE_ID', 'api-gateway-default');
+      
+      const authRequest = {
+        serviceId,
+        apiKey,
+        targetService: 'all',
+        operation: 'proxy_requests',
+      };
+
+      const response = await axios.post(
+        `${this.serviceRegistry}/service-auth/authenticate`,
+        authRequest,
+        { 
+          timeout: 10000,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'OMC-ERP-API-Gateway/1.0',
+          }
+        }
+      );
+
+      if (response.data.success && response.data.serviceToken) {
+        this.logger.debug('Successfully authenticated with service registry');
+        return response.data.serviceToken;
+      } else {
+        throw new Error(`Authentication failed: ${response.data.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      this.logger.error('Service registry authentication failed:', error);
+      throw new Error(`Service authentication failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check if a JWT token is still valid (not expired)
+   */
+  private isTokenValid(token: string): boolean {
+    try {
+      const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+      const now = Math.floor(Date.now() / 1000);
+      const gracePeriod = 300; // 5 minutes grace period
+      
+      return payload.exp > (now + gracePeriod);
+    } catch {
+      return false;
+    }
   }
 
   private handleProxyError(error: any, service: string, requestId: string): never {

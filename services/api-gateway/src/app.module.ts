@@ -25,6 +25,7 @@ import { ApiVersioningModule } from './versioning/versioning.module';
 import { RequestLoggingMiddleware } from './middleware/request-logging.middleware';
 import { RequestTraceMiddleware } from './middleware/request-trace.middleware';
 import { CompressionMiddleware } from './middleware/compression.middleware';
+import { ResponseOptimizationMiddleware } from './middleware/response-optimization.middleware';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { APP_GUARD } from '@nestjs/core';
 // import { redisStore } from 'cache-manager-redis-store';
@@ -105,7 +106,12 @@ import { APP_GUARD } from '@nestjs/core';
 export class AppModule {
   configure(consumer: MiddlewareConsumer) {
     consumer
-      .apply(RequestLoggingMiddleware, RequestTraceMiddleware, CompressionMiddleware)
+      .apply(
+        RequestLoggingMiddleware, 
+        RequestTraceMiddleware, 
+        ResponseOptimizationMiddleware,
+        CompressionMiddleware
+      )
       .forRoutes({ path: '*', method: RequestMethod.ALL });
   }
 }

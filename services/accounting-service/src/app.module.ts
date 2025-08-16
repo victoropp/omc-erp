@@ -33,6 +33,9 @@ import { AutomatedPostingModule } from './automated-posting/automated-posting.mo
 // WebSocket for Real-time Updates
 import { AccountingGateway } from './gateways/accounting.gateway';
 
+// Service Authentication
+import { ServiceAuthModule } from './auth/service-auth.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -63,6 +66,9 @@ import { AccountingGateway } from './gateways/accounting.gateway';
       ignoreErrors: false,
     }),
     ScheduleModule.forRoot(),
+    
+    // Service Authentication
+    ServiceAuthModule,
     
     // Core Accounting Modules
     GeneralLedgerModule,

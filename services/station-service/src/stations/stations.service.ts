@@ -16,7 +16,7 @@ export class StationsService {
     @InjectRepository(Station)
     private readonly stationRepository: Repository<Station>,
     @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
+    private readonly _userRepository: Repository<User>,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -206,7 +206,7 @@ export class StationsService {
 
   async activate(id: string, tenantId: string): Promise<Station> {
     const station = await this.findOne(id, tenantId);
-    station.isActive = true;
+    station.status = StationStatus.ACTIVE;
     station.status = StationStatus.ACTIVE;
     station.updatedAt = new Date();
 
@@ -222,7 +222,7 @@ export class StationsService {
 
   async deactivate(id: string, tenantId: string, reason?: string): Promise<Station> {
     const station = await this.findOne(id, tenantId);
-    station.isActive = false;
+    station.status = StationStatus.INACTIVE;
     station.status = StationStatus.INACTIVE;
     station.updatedAt = new Date();
 
@@ -245,8 +245,8 @@ export class StationsService {
       id: tank.id,
       fuelType: tank.fuelType,
       capacity: tank.capacity,
-      currentVolume: tank.currentVolume,
-      fillPercentage: (tank.currentVolume / tank.capacity) * 100,
+      currentVolume: tank.currentLevel,
+      fillPercentage: (tank.currentLevel / tank.capacity) * 100,
       status: tank.status,
     })) || [];
 
@@ -270,7 +270,7 @@ export class StationsService {
       name: station.name,
       code: station.code,
       status: station.status,
-      isActive: station.isActive,
+      isActive: station.status === StationStatus.ACTIVE,
       summary: {
         totalTanks,
         totalPumps,
@@ -316,7 +316,7 @@ export class StationsService {
     return stations;
   }
 
-  private async checkActiveOperations(stationId: string): Promise<boolean> {
+  private async checkActiveOperations(_stationId: string): Promise<boolean> {
     // In a real implementation, this would check for:
     // - Active transactions
     // - Pending maintenance
