@@ -13,6 +13,7 @@ export enum EventType {
   UPPF_CLAIM_SUBMITTED = 'uppf.claim.submitted',
   DEALER_SETTLEMENT = 'dealer.settlement',
   SYSTEM_ALERT = 'system.alert',
+  SYSTEM_ERROR = 'system.error',
   USER_ACTION = 'user.action',
 }
 
@@ -108,3 +109,6 @@ export interface SystemEvent {
   retryCount?: number;
   processed?: boolean;
 }
+
+// Alias for EventDto to maintain consistency
+export type EventDto = SystemEvent;

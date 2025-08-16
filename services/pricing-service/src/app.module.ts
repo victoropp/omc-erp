@@ -57,10 +57,10 @@ import { StationPrice } from './pricing/entities/station-price.entity';
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
         host: configService.get('DB_HOST', 'localhost'),
-        port: configService.get('DB_PORT', 5432),
+        port: configService.get('DB_PORT', 5434),
         username: configService.get('DB_USER', 'postgres'),
         password: configService.get('DB_PASSWORD', 'postgres'),
-        database: configService.get('DB_NAME', 'omc_erp_dev'),
+        database: configService.get('DB_NAME', 'omc_erp'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: false,
         logging: configService.get('NODE_ENV') === 'development',

@@ -99,7 +99,7 @@ export class ProxyService {
       return response.data;
     } catch (error) {
       const duration = Date.now() - startTime;
-      this.logger.error(`Request ${requestId} to ${service} failed after ${duration}ms: ${error.message}`);
+      this.logger.error(`Request ${requestId} to ${service} failed after ${duration}ms: ${(error as any)?.message || error}`);
       
       // Update service metrics on error
       const serviceInstance = await this.discoverService(service);
@@ -137,7 +137,7 @@ export class ProxyService {
       
       return serviceInstance;
     } catch (error) {
-      this.logger.warn(`Service discovery failed for ${serviceName}: ${error.message}`);
+      this.logger.warn(`Service discovery failed for ${serviceName}: ${(error as any)?.message || error}`);
       return null;
     }
   }
@@ -177,31 +177,43 @@ export class ProxyService {
   private handleProxyError(error: any, service: string, requestId: string): never {
     if (error.response) {
       // The service responded with an error
-      throw {
+      const errorResponse = {
         statusCode: error.response.status,
         message: error.response.data?.message || 'Service error',
-        error: error.response.data?.error,
+        error: error.response.data?.error || 'Unknown error',
         service,
         requestId,
+        timestamp: new Date().toISOString(),
       };
+      
+      this.logger.error(`Service ${service} error: ${JSON.stringify(errorResponse)}`);
+      throw errorResponse;
     } else if (error.request) {
       // Service didn't respond
-      throw {
+      const errorResponse = {
         statusCode: 503,
         message: `Service '${service}' unavailable`,
         error: 'Service did not respond',
         service,
         requestId,
+        timestamp: new Date().toISOString(),
       };
+      
+      this.logger.error(`Service ${service} unavailable: ${JSON.stringify(errorResponse)}`);
+      throw errorResponse;
     } else {
       // Request setup error
-      throw {
+      const errorResponse = {
         statusCode: 500,
-        message: 'Internal server error',
-        error: error.message,
+        message: 'Internal gateway error',
+        error: error.message || 'Unknown error',
         service,
         requestId,
+        timestamp: new Date().toISOString(),
       };
+      
+      this.logger.error(`Gateway error for service ${service}: ${JSON.stringify(errorResponse)}`);
+      throw errorResponse;
     }
   }
 }

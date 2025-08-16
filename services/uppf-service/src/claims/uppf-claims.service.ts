@@ -482,8 +482,10 @@ export class UPPFClaimsService {
       };
     }
 
-    this.logger.log(`Performing enhanced GPS validation for ${consignmentId}`);  
-  
+    // TODO: Implement the actual enhanced GPS validation logic here
+    throw new Error('Enhanced GPS validation not yet implemented');
+  }
+
   /**
    * Validate GPS route and detect anomalies (Legacy method for compatibility)
    */

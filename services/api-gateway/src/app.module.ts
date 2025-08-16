@@ -14,18 +14,20 @@ import { InventoryModule } from './inventory/inventory.module';
 import { CustomerModule } from './customer/customer.module';
 import { ComplianceModule } from './compliance/compliance.module';
 import { RegulatoryModule } from './regulatory/regulatory.module';
-import { IoTModule } from './iot/iot.module';
+import { IotModule } from './iot/iot.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { MobileModule } from './mobile/mobile.module';
 import { IntegrationsModule } from './integrations/integrations.module';
-import { GraphQLModule } from './graphql/graphql.module';
+import { GraphqlModule } from './graphql/graphql.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { SecurityModule } from './security/security.module';
 import { ApiVersioningModule } from './versioning/versioning.module';
 import { RequestLoggingMiddleware } from './middleware/request-logging.middleware';
 import { RequestTraceMiddleware } from './middleware/request-trace.middleware';
 import { CompressionMiddleware } from './middleware/compression.middleware';
-import * as redisStore from 'cache-manager-redis-store';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { APP_GUARD } from '@nestjs/core';
+// import { redisStore } from 'cache-manager-redis-store';
 
 @Module({
   imports: [
@@ -39,11 +41,9 @@ import * as redisStore from 'cache-manager-redis-store';
     // Caching with Redis
     CacheModule.register({
       isGlobal: true,
-      store: redisStore,
-      host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379,
       ttl: 300, // 5 minutes default TTL
       max: 1000, // max items in cache
+      store: 'memory', // Using memory store for now, can be configured for Redis
     }),
 
     // Advanced Rate limiting with multiple strategies
@@ -88,14 +88,19 @@ import * as redisStore from 'cache-manager-redis-store';
     CustomerModule,
     ComplianceModule,
     RegulatoryModule,
-    IoTModule,
+    IotModule,
     RealtimeModule,
     MobileModule,
     IntegrationsModule,
-    GraphQLModule,
+    GraphqlModule,
   ],
   controllers: [],
-  providers: [],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+  ],
 })
 export class AppModule {
   configure(consumer: MiddlewareConsumer) {

@@ -1,1 +1,389 @@
-import { Injectable, Logger } from '@nestjs/common';\nimport { HttpService } from '@nestjs/axios';\nimport { ConfigService } from '@nestjs/config';\nimport { Cache } from 'cache-manager';\nimport { Inject, CACHE_MANAGER } from '@nestjs/cache-manager';\nimport { lastValueFrom } from 'rxjs';\n\n@Injectable()\nexport class FinancialService {\n  private readonly logger = new Logger(FinancialService.name);\n  private readonly financialServiceUrl: string;\n\n  constructor(\n    private httpService: HttpService,\n    private configService: ConfigService,\n    @Inject(CACHE_MANAGER) private cacheManager: Cache,\n  ) {\n    this.financialServiceUrl = this.configService.get('FINANCIAL_SERVICE_URL', 'http://localhost:3005');\n  }\n\n  async forwardRequest(path: string, method: string, data?: any, headers?: any): Promise<any> {\n    const url = `${this.financialServiceUrl}${path}`;\n    \n    try {\n      let response;\n      \n      switch (method.toUpperCase()) {\n        case 'GET':\n          response = await lastValueFrom(this.httpService.get(url, { headers }));\n          break;\n        case 'POST':\n          response = await lastValueFrom(this.httpService.post(url, data, { headers }));\n          break;\n        case 'PUT':\n          response = await lastValueFrom(this.httpService.put(url, data, { headers }));\n          break;\n        case 'PATCH':\n          response = await lastValueFrom(this.httpService.patch(url, data, { headers }));\n          break;\n        case 'DELETE':\n          response = await lastValueFrom(this.httpService.delete(url, { headers }));\n          break;\n        default:\n          throw new Error(`Unsupported HTTP method: ${method}`);\n      }\n      \n      return response.data;\n    } catch (error) {\n      this.logger.error(`Financial service request failed: ${method} ${path}`, error.response?.data || error.message);\n      throw error;\n    }\n  }\n\n  async getChartOfAccounts(filters?: any): Promise<any> {\n    const cacheKey = `coa:${JSON.stringify(filters || {})}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest('/chart-of-accounts', 'GET');\n    await this.cacheManager.set(cacheKey, result, 300000); // 5 minutes\n    \n    return result;\n  }\n\n  async createAccount(accountData: any): Promise<any> {\n    const result = await this.forwardRequest('/chart-of-accounts', 'POST', accountData);\n    \n    // Clear related caches\n    await this.clearAccountCaches();\n    \n    return result;\n  }\n\n  async updateAccount(accountId: string, accountData: any): Promise<any> {\n    const result = await this.forwardRequest(`/chart-of-accounts/${accountId}`, 'PUT', accountData);\n    \n    // Clear related caches\n    await this.clearAccountCaches();\n    \n    return result;\n  }\n\n  async deleteAccount(accountId: string): Promise<any> {\n    const result = await this.forwardRequest(`/chart-of-accounts/${accountId}`, 'DELETE');\n    \n    // Clear related caches\n    await this.clearAccountCaches();\n    \n    return result;\n  }\n\n  async getTrialBalance(periodId?: string, asOfDate?: string): Promise<any> {\n    const cacheKey = `trial_balance:${periodId}:${asOfDate}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/general-ledger/trial-balance?periodId=${periodId}&asOfDate=${asOfDate}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes\n    \n    return result;\n  }\n\n  async getFinancialStatements(periodId: string, statementType: string): Promise<any> {\n    const cacheKey = `financial_statements:${periodId}:${statementType}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/financial-reporting/${statementType}?periodId=${periodId}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 1800000); // 30 minutes\n    \n    return result;\n  }\n\n  async getAccountBalance(accountCode: string, asOfDate?: string): Promise<any> {\n    const cacheKey = `account_balance:${accountCode}:${asOfDate || 'current'}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/general-ledger/account-balance/${accountCode}?asOfDate=${asOfDate}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 300000); // 5 minutes\n    \n    return result;\n  }\n\n  async getAccountMovements(accountCode: string, fromDate?: string, toDate?: string): Promise<any> {\n    const params = new URLSearchParams();\n    if (fromDate) params.append('fromDate', fromDate);\n    if (toDate) params.append('toDate', toDate);\n    \n    const result = await this.forwardRequest(`/general-ledger/account-movements/${accountCode}?${params.toString()}`, 'GET');\n    return result;\n  }\n\n  async createJournalEntry(journalData: any): Promise<any> {\n    const result = await this.forwardRequest('/journal-entries', 'POST', journalData);\n    \n    // Clear related caches\n    await this.clearFinancialCaches();\n    \n    return result;\n  }\n\n  async postJournalEntry(journalId: string): Promise<any> {\n    const result = await this.forwardRequest(`/journal-entries/${journalId}/post`, 'POST');\n    \n    // Clear related caches\n    await this.clearFinancialCaches();\n    \n    return result;\n  }\n\n  async reverseJournalEntry(journalId: string, reason: string): Promise<any> {\n    const result = await this.forwardRequest(`/journal-entries/${journalId}/reverse`, 'POST', { reason });\n    \n    // Clear related caches\n    await this.clearFinancialCaches();\n    \n    return result;\n  }\n\n  async getJournalEntries(filters?: any): Promise<any> {\n    const params = new URLSearchParams();\n    if (filters) {\n      Object.keys(filters).forEach(key => {\n        if (filters[key] !== undefined && filters[key] !== null) {\n          params.append(key, filters[key].toString());\n        }\n      });\n    }\n    \n    const result = await this.forwardRequest(`/journal-entries?${params.toString()}`, 'GET');\n    return result;\n  }\n\n  async getJournalEntry(journalId: string): Promise<any> {\n    const cacheKey = `journal_entry:${journalId}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/journal-entries/${journalId}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes\n    \n    return result;\n  }\n\n  async updateJournalEntry(journalId: string, journalData: any): Promise<any> {\n    const result = await this.forwardRequest(`/journal-entries/${journalId}`, 'PUT', journalData);\n    \n    // Clear related caches\n    await this.clearFinancialCaches();\n    await this.cacheManager.del(`journal_entry:${journalId}`);\n    \n    return result;\n  }\n\n  async deleteJournalEntry(journalId: string): Promise<any> {\n    const result = await this.forwardRequest(`/journal-entries/${journalId}`, 'DELETE');\n    \n    // Clear related caches\n    await this.clearFinancialCaches();\n    await this.cacheManager.del(`journal_entry:${journalId}`);\n    \n    return result;\n  }\n\n  async calculateTaxes(taxCalculationData: any): Promise<any> {\n    const result = await this.forwardRequest('/tax-management/calculate', 'POST', taxCalculationData);\n    return result;\n  }\n\n  async getGhanaTaxRates(taxType?: string): Promise<any> {\n    const cacheKey = `ghana_tax_rates:${taxType || 'all'}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/tax-management/ghana-rates?taxType=${taxType}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 3600000); // 1 hour\n    \n    return result;\n  }\n\n  async submitTaxReturn(taxReturnData: any): Promise<any> {\n    const result = await this.forwardRequest('/tax-management/returns', 'POST', taxReturnData);\n    return result;\n  }\n\n  async getFixedAssets(filters?: any): Promise<any> {\n    const params = new URLSearchParams();\n    if (filters) {\n      Object.keys(filters).forEach(key => {\n        if (filters[key] !== undefined && filters[key] !== null) {\n          params.append(key, filters[key].toString());\n        }\n      });\n    }\n    \n    const result = await this.forwardRequest(`/fixed-assets?${params.toString()}`, 'GET');\n    return result;\n  }\n\n  async createFixedAsset(assetData: any): Promise<any> {\n    const result = await this.forwardRequest('/fixed-assets', 'POST', assetData);\n    return result;\n  }\n\n  async calculateDepreciation(assetId: string, method: string, params: any): Promise<any> {\n    const result = await this.forwardRequest(`/fixed-assets/${assetId}/depreciation`, 'POST', {\n      method,\n      ...params,\n    });\n    return result;\n  }\n\n  async runDepreciationSchedule(periodId: string): Promise<any> {\n    const result = await this.forwardRequest(`/fixed-assets/depreciation/run/${periodId}`, 'POST');\n    \n    // Clear related caches\n    await this.clearFinancialCaches();\n    \n    return result;\n  }\n\n  async getBudgets(fiscalYear?: number, departmentId?: string): Promise<any> {\n    const params = new URLSearchParams();\n    if (fiscalYear) params.append('fiscalYear', fiscalYear.toString());\n    if (departmentId) params.append('departmentId', departmentId);\n    \n    const result = await this.forwardRequest(`/budget-management/budgets?${params.toString()}`, 'GET');\n    return result;\n  }\n\n  async createBudget(budgetData: any): Promise<any> {\n    const result = await this.forwardRequest('/budget-management/budgets', 'POST', budgetData);\n    return result;\n  }\n\n  async getBudgetVarianceAnalysis(budgetId: string, periodId?: string): Promise<any> {\n    const cacheKey = `budget_variance:${budgetId}:${periodId || 'current'}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/budget-management/variance-analysis/${budgetId}?periodId=${periodId}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes\n    \n    return result;\n  }\n\n  async getProjectProfitability(projectId: string, fromDate?: string, toDate?: string): Promise<any> {\n    const params = new URLSearchParams();\n    if (fromDate) params.append('fromDate', fromDate);\n    if (toDate) params.append('toDate', toDate);\n    \n    const cacheKey = `project_profitability:${projectId}:${fromDate || ''}:${toDate || ''}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/project-accounting/profitability/${projectId}?${params.toString()}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 900000); // 15 minutes\n    \n    return result;\n  }\n\n  async getCostAllocation(costCenterId: string, periodId?: string): Promise<any> {\n    const cacheKey = `cost_allocation:${costCenterId}:${periodId || 'current'}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/cost-management/allocation/${costCenterId}?periodId=${periodId}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes\n    \n    return result;\n  }\n\n  async getIfrsCompliance(periodId: string): Promise<any> {\n    const cacheKey = `ifrs_compliance:${periodId}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    const result = await this.forwardRequest(`/ifrs-compliance/${periodId}`, 'GET');\n    await this.cacheManager.set(cacheKey, result, 1800000); // 30 minutes\n    \n    return result;\n  }\n\n  async generateIfrsReport(reportType: string, periodId: string): Promise<any> {\n    const result = await this.forwardRequest(`/ifrs-compliance/reports/${reportType}?periodId=${periodId}`, 'GET');\n    return result;\n  }\n\n  private async clearAccountCaches(): Promise<void> {\n    const cachesToClear = [\n      'coa:*',\n      'account_balance:*',\n      'trial_balance:*',\n      'financial_statements:*',\n    ];\n    \n    // In a real implementation, you'd use cache patterns or tags\n    this.logger.debug('Clearing account-related caches');\n  }\n\n  private async clearFinancialCaches(): Promise<void> {\n    const cachesToClear = [\n      'trial_balance:*',\n      'financial_statements:*',\n      'account_balance:*',\n      'budget_variance:*',\n      'project_profitability:*',\n      'cost_allocation:*',\n    ];\n    \n    // In a real implementation, you'd use cache patterns or tags\n    this.logger.debug('Clearing financial-related caches');\n  }\n\n  async getHealthCheck(): Promise<any> {\n    try {\n      const result = await this.forwardRequest('/health', 'GET');\n      return {\n        status: 'healthy',\n        service: 'financial-service',\n        timestamp: new Date().toISOString(),\n        details: result,\n      };\n    } catch (error) {\n      return {\n        status: 'unhealthy',\n        service: 'financial-service',\n        timestamp: new Date().toISOString(),\n        error: error.message,\n      };\n    }\n  }\n}"
+import { Injectable, Logger } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import { Cache } from 'cache-manager';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Inject } from '@nestjs/common';
+import { lastValueFrom } from 'rxjs';
+
+@Injectable()
+export class FinancialService {
+  private readonly logger = new Logger(FinancialService.name);
+  private readonly financialServiceUrl: string;
+
+  constructor(
+    private httpService: HttpService,
+    private configService: ConfigService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+  ) {
+    this.financialServiceUrl = this.configService.get('FINANCIAL_SERVICE_URL', 'http://localhost:3005');
+  }
+
+  async forwardRequest(path: string, method: string, data?: any, headers?: any): Promise<any> {
+    const url = `${this.financialServiceUrl}${path}`;
+    
+    try {
+      let response;
+      
+      switch (method.toUpperCase()) {
+        case 'GET':
+          response = await lastValueFrom(this.httpService.get(url, { headers }));
+          break;
+        case 'POST':
+          response = await lastValueFrom(this.httpService.post(url, data, { headers }));
+          break;
+        case 'PUT':
+          response = await lastValueFrom(this.httpService.put(url, data, { headers }));
+          break;
+        case 'PATCH':
+          response = await lastValueFrom(this.httpService.patch(url, data, { headers }));
+          break;
+        case 'DELETE':
+          response = await lastValueFrom(this.httpService.delete(url, { headers }));
+          break;
+        default:
+          throw new Error(`Unsupported HTTP method: ${method}`);
+      }
+      
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`Financial service request failed: ${method} ${path}`, error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async getChartOfAccounts(filters?: any): Promise<any> {
+    const cacheKey = `coa:${JSON.stringify(filters || {})}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest('/chart-of-accounts', 'GET');
+    await this.cacheManager.set(cacheKey, result, 300000); // 5 minutes
+    
+    return result;
+  }
+
+  async createAccount(accountData: any): Promise<any> {
+    const result = await this.forwardRequest('/chart-of-accounts', 'POST', accountData);
+    
+    // Clear related caches
+    await this.clearAccountCaches();
+    
+    return result;
+  }
+
+  async updateAccount(accountId: string, accountData: any): Promise<any> {
+    const result = await this.forwardRequest(`/chart-of-accounts/${accountId}`, 'PUT', accountData);
+    
+    // Clear related caches
+    await this.clearAccountCaches();
+    
+    return result;
+  }
+
+  async deleteAccount(accountId: string): Promise<any> {
+    const result = await this.forwardRequest(`/chart-of-accounts/${accountId}`, 'DELETE');
+    
+    // Clear related caches
+    await this.clearAccountCaches();
+    
+    return result;
+  }
+
+  async getTrialBalance(periodId?: string, asOfDate?: string): Promise<any> {
+    const cacheKey = `trial_balance:${periodId}:${asOfDate}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/general-ledger/trial-balance?periodId=${periodId}&asOfDate=${asOfDate}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes
+    
+    return result;
+  }
+
+  async getFinancialStatements(periodId: string, statementType: string): Promise<any> {
+    const cacheKey = `financial_statements:${periodId}:${statementType}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/financial-reporting/${statementType}?periodId=${periodId}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 1800000); // 30 minutes
+    
+    return result;
+  }
+
+  async getAccountBalance(accountCode: string, asOfDate?: string): Promise<any> {
+    const cacheKey = `account_balance:${accountCode}:${asOfDate || 'current'}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/general-ledger/account-balance/${accountCode}?asOfDate=${asOfDate}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 300000); // 5 minutes
+    
+    return result;
+  }
+
+  async getAccountMovements(accountCode: string, fromDate?: string, toDate?: string): Promise<any> {
+    const params = new URLSearchParams();
+    if (fromDate) params.append('fromDate', fromDate);
+    if (toDate) params.append('toDate', toDate);
+    
+    const result = await this.forwardRequest(`/general-ledger/account-movements/${accountCode}?${params.toString()}`, 'GET');
+    return result;
+  }
+
+  async createJournalEntry(journalData: any): Promise<any> {
+    const result = await this.forwardRequest('/journal-entries', 'POST', journalData);
+    
+    // Clear related caches
+    await this.clearFinancialCaches();
+    
+    return result;
+  }
+
+  async postJournalEntry(journalId: string): Promise<any> {
+    const result = await this.forwardRequest(`/journal-entries/${journalId}/post`, 'POST');
+    
+    // Clear related caches
+    await this.clearFinancialCaches();
+    
+    return result;
+  }
+
+  async reverseJournalEntry(journalId: string, reason: string): Promise<any> {
+    const result = await this.forwardRequest(`/journal-entries/${journalId}/reverse`, 'POST', { reason });
+    
+    // Clear related caches
+    await this.clearFinancialCaches();
+    
+    return result;
+  }
+
+  async getJournalEntries(filters?: any): Promise<any> {
+    const params = new URLSearchParams();
+    if (filters) {
+      Object.keys(filters).forEach(key => {
+        if (filters[key] !== undefined && filters[key] !== null) {
+          params.append(key, filters[key].toString());
+        }
+      });
+    }
+    
+    const result = await this.forwardRequest(`/journal-entries?${params.toString()}`, 'GET');
+    return result;
+  }
+
+  async getJournalEntry(journalId: string): Promise<any> {
+    const cacheKey = `journal_entry:${journalId}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/journal-entries/${journalId}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes
+    
+    return result;
+  }
+
+  async updateJournalEntry(journalId: string, journalData: any): Promise<any> {
+    const result = await this.forwardRequest(`/journal-entries/${journalId}`, 'PUT', journalData);
+    
+    // Clear related caches
+    await this.clearFinancialCaches();
+    await this.cacheManager.del(`journal_entry:${journalId}`);
+    
+    return result;
+  }
+
+  async deleteJournalEntry(journalId: string): Promise<any> {
+    const result = await this.forwardRequest(`/journal-entries/${journalId}`, 'DELETE');
+    
+    // Clear related caches
+    await this.clearFinancialCaches();
+    await this.cacheManager.del(`journal_entry:${journalId}`);
+    
+    return result;
+  }
+
+  async calculateTaxes(taxCalculationData: any): Promise<any> {
+    const result = await this.forwardRequest('/tax-management/calculate', 'POST', taxCalculationData);
+    return result;
+  }
+
+  async getGhanaTaxRates(taxType?: string): Promise<any> {
+    const cacheKey = `ghana_tax_rates:${taxType || 'all'}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/tax-management/ghana-rates?taxType=${taxType}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 3600000); // 1 hour
+    
+    return result;
+  }
+
+  async submitTaxReturn(taxReturnData: any): Promise<any> {
+    const result = await this.forwardRequest('/tax-management/returns', 'POST', taxReturnData);
+    return result;
+  }
+
+  async getFixedAssets(filters?: any): Promise<any> {
+    const params = new URLSearchParams();
+    if (filters) {
+      Object.keys(filters).forEach(key => {
+        if (filters[key] !== undefined && filters[key] !== null) {
+          params.append(key, filters[key].toString());
+        }
+      });
+    }
+    
+    const result = await this.forwardRequest(`/fixed-assets?${params.toString()}`, 'GET');
+    return result;
+  }
+
+  async createFixedAsset(assetData: any): Promise<any> {
+    const result = await this.forwardRequest('/fixed-assets', 'POST', assetData);
+    return result;
+  }
+
+  async calculateDepreciation(assetId: string, method: string, params: any): Promise<any> {
+    const result = await this.forwardRequest(`/fixed-assets/${assetId}/depreciation`, 'POST', {
+      method,
+      ...params,
+    });
+    return result;
+  }
+
+  async runDepreciationSchedule(periodId: string): Promise<any> {
+    const result = await this.forwardRequest(`/fixed-assets/depreciation/run/${periodId}`, 'POST');
+    
+    // Clear related caches
+    await this.clearFinancialCaches();
+    
+    return result;
+  }
+
+  async getBudgets(fiscalYear?: number, departmentId?: string): Promise<any> {
+    const params = new URLSearchParams();
+    if (fiscalYear) params.append('fiscalYear', fiscalYear.toString());
+    if (departmentId) params.append('departmentId', departmentId);
+    
+    const result = await this.forwardRequest(`/budget-management/budgets?${params.toString()}`, 'GET');
+    return result;
+  }
+
+  async createBudget(budgetData: any): Promise<any> {
+    const result = await this.forwardRequest('/budget-management/budgets', 'POST', budgetData);
+    return result;
+  }
+
+  async getBudgetVarianceAnalysis(budgetId: string, periodId?: string): Promise<any> {
+    const cacheKey = `budget_variance:${budgetId}:${periodId || 'current'}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/budget-management/variance-analysis/${budgetId}?periodId=${periodId}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes
+    
+    return result;
+  }
+
+  async getProjectProfitability(projectId: string, fromDate?: string, toDate?: string): Promise<any> {
+    const params = new URLSearchParams();
+    if (fromDate) params.append('fromDate', fromDate);
+    if (toDate) params.append('toDate', toDate);
+    
+    const cacheKey = `project_profitability:${projectId}:${fromDate || ''}:${toDate || ''}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/project-accounting/profitability/${projectId}?${params.toString()}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 900000); // 15 minutes
+    
+    return result;
+  }
+
+  async getCostAllocation(costCenterId: string, periodId?: string): Promise<any> {
+    const cacheKey = `cost_allocation:${costCenterId}:${periodId || 'current'}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/cost-management/allocation/${costCenterId}?periodId=${periodId}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 600000); // 10 minutes
+    
+    return result;
+  }
+
+  async getIfrsCompliance(periodId: string): Promise<any> {
+    const cacheKey = `ifrs_compliance:${periodId}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.forwardRequest(`/ifrs-compliance/${periodId}`, 'GET');
+    await this.cacheManager.set(cacheKey, result, 1800000); // 30 minutes
+    
+    return result;
+  }
+
+  async generateIfrsReport(reportType: string, periodId: string): Promise<any> {
+    const result = await this.forwardRequest(`/ifrs-compliance/reports/${reportType}?periodId=${periodId}`, 'GET');
+    return result;
+  }
+
+  private async clearAccountCaches(): Promise<void> {
+    // In a real implementation, you'd use cache patterns or tags
+    this.logger.debug('Clearing account-related caches');
+  }
+
+  private async clearFinancialCaches(): Promise<void> {
+    // In a real implementation, you'd use cache patterns or tags
+    this.logger.debug('Clearing financial-related caches');
+  }
+
+  async getHealthCheck(): Promise<any> {
+    try {
+      const result = await this.forwardRequest('/health', 'GET');
+      return {
+        status: 'healthy',
+        service: 'financial-service',
+        timestamp: new Date().toISOString(),
+        details: result,
+      };
+    } catch (error: any) {
+      return {
+        status: 'unhealthy',
+        service: 'financial-service',
+        timestamp: new Date().toISOString(),
+        error: error.message,
+      };
+    }
+  }
+}

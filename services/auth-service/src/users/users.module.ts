@@ -5,7 +5,9 @@ import { UsersController } from './users.controller';
 import { User } from '@omc-erp/database';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User])],
+  imports: [
+    TypeOrmModule.forFeature([User])
+  ],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],

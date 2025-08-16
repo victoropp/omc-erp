@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DealerSettlement } from '../entities/dealer-settlement.entity';
-import { DealerLoan } from '../entities/dealer-loan.entity';
+import { DealerLoan, DealerLoanStatus } from '../entities/dealer-loan.entity';
 
 export interface SettlementStatementDto {
   companyInfo: {
@@ -1031,7 +1031,7 @@ export class DealerSettlementStatementService {
 
   private async getActiveLoans(stationId: string, tenantId: string): Promise<DealerLoan[]> {
     return this.loanRepository.find({
-      where: { stationId, tenantId, status: 'active' },
+      where: { stationId, tenantId, status: DealerLoanStatus.ACTIVE },
       order: { startDate: 'ASC' },
     });
   }

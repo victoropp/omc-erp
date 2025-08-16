@@ -24,10 +24,10 @@ import { DealerMarginIntegrationService } from './integration/dealer-margin-inte
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
         host: configService.get('DB_HOST', 'localhost'),
-        port: configService.get('DB_PORT', 5432),
+        port: configService.get('DB_PORT', 5434),
         username: configService.get('DB_USERNAME', 'postgres'),
         password: configService.get('DB_PASSWORD', 'password'),
-        database: configService.get('DB_DATABASE', 'omc_erp_daily_delivery'),
+        database: configService.get('DB_DATABASE', 'omc_erp'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         migrations: [__dirname + '/migrations/*{.ts,.js}'],
         synchronize: configService.get('NODE_ENV', 'development') === 'development',

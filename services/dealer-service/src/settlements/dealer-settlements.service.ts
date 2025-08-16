@@ -3,8 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, Between } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { DealerSettlement } from './entities/dealer-settlement.entity';
-import { DealerLoan } from '../loans/entities/dealer-loan.entity';
+import { DealerSettlement } from '../entities/dealer-settlement.entity';
+import { DealerLoan, DealerLoanStatus } from '../entities/dealer-loan.entity';
 import { Transaction } from '@omc-erp/database';
 import { DealerSettlementStatus, TransactionStatus } from '@omc-erp/shared-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -399,7 +399,7 @@ export class DealerSettlementsService {
 
     // Get active loans
     const activeLoans = await this.loanRepository.find({
-      where: { stationId, tenantId, status: 'active' },
+      where: { stationId, tenantId, status: DealerLoanStatus.ACTIVE },
     });
 
     // Calculate average margins
@@ -481,7 +481,7 @@ export class DealerSettlementsService {
     tenantId: string,
   ): Promise<{ amount: number; details?: any }> {
     const activeLoans = await this.loanRepository.find({
-      where: { stationId, tenantId, status: 'active' },
+      where: { stationId, tenantId, status: DealerLoanStatus.ACTIVE },
     });
 
     if (activeLoans.length === 0) {
@@ -533,7 +533,7 @@ export class DealerSettlementsService {
     entityManager: any,
   ): Promise<void> {
     const activeLoans = await entityManager.find('DealerLoan', {
-      where: { stationId, tenantId, status: 'active' },
+      where: { stationId, tenantId, status: DealerLoanStatus.ACTIVE },
       order: { startDate: 'ASC' }, // Pay off older loans first
     });
 

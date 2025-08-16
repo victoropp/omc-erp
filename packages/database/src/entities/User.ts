@@ -2,7 +2,7 @@ import { Entity, Column, ManyToOne, JoinColumn, Index, BeforeInsert, BeforeUpdat
 import { BaseEntity } from './BaseEntity';
 import { UserStatus, UserRole } from '@omc-erp/shared-types';
 import { Tenant } from './Tenant';
-import * as bcrypt from 'bcrypt';
+// import * as bcrypt from 'bcrypt';
 
 @Entity('users')
 @Index(['email', 'tenantId'], { unique: true })
@@ -45,22 +45,25 @@ export class User extends BaseEntity {
   status: UserStatus;
 
   @Column({ type: 'timestamptz', nullable: true })
-  lastLoginAt: Date;
+  lastLoginAt: Date | null;
 
   @Column({ type: 'timestamptz', nullable: true })
-  emailVerifiedAt: Date;
+  emailVerifiedAt: Date | null;
 
   @Column({ type: 'int', default: 0 })
   failedLoginAttempts: number;
 
   @Column({ type: 'timestamptz', nullable: true })
-  lockedUntil: Date;
+  lockedUntil: Date | null;
 
   @Column({ type: 'uuid', nullable: true })
   createdBy: string;
 
   @Column({ type: 'uuid', nullable: true })
   updatedBy: string;
+
+  @Column({ type: 'text', nullable: true, select: false })
+  refreshToken: string | null;
 
   // Relations
   @ManyToOne(() => Tenant, (tenant) => tenant.users)
@@ -74,16 +77,17 @@ export class User extends BaseEntity {
 
   // Methods
   async setPassword(password: string): Promise<void> {
-    const saltRounds = 10;
-    this.passwordHash = await bcrypt.hash(password, saltRounds);
+    // TODO: Implement bcrypt hashing
+    this.passwordHash = password;
   }
 
   async validatePassword(password: string): Promise<boolean> {
-    return bcrypt.compare(password, this.passwordHash);
+    // TODO: Implement bcrypt comparison
+    return this.passwordHash === password;
   }
 
   isLocked(): boolean {
-    return this.lockedUntil && this.lockedUntil > new Date();
+    return !!(this.lockedUntil && this.lockedUntil > new Date());
   }
 
   incrementFailedLoginAttempts(): void {

@@ -1,0 +1,124 @@
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var ConfigurationAuditService_1;
+var _a, _b, _c;
+Object.defineProperty(exports, "__esModule", { value: true });
+const common_1 = require("@nestjs/common");
+nimport;
+{
+    InjectRepository;
+}
+from;
+'@nestjs/typeorm';
+nimport;
+{
+    Repository;
+}
+from;
+'typeorm';
+nimport;
+{
+    EventEmitter2, OnEvent;
+}
+from;
+'@nestjs/event-emitter';
+nimport;
+{
+    Configuration;
+}
+from;
+'../entities/configuration.entity';
+nimport;
+{
+    PriceBuildupAuditTrail;
+}
+from;
+'../entities/price-buildup.entity';
+n;
+ninterface;
+AuditEvent;
+{
+    n;
+    configurationId ?  : string;
+    n;
+    buildupVersionId ?  : string;
+    n;
+    componentId ?  : string;
+    n;
+    actionType: string;
+    n;
+    actionDescription: string;
+    n;
+    oldValues ?  : any;
+    n;
+    newValues ?  : any;
+    n;
+    actionBy: string;
+    n;
+    ipAddress ?  : string;
+    n;
+    userAgent ?  : string;
+    n;
+    sessionId ?  : string;
+    n;
+}
+n;
+ninterface;
+ConfigurationChange;
+{
+    n;
+    configurationId: string;
+    n;
+    key: string;
+    n;
+    module: string;
+    n;
+    tenantId ?  : string;
+    n;
+    previousValue: any;
+    n;
+    newValue: any;
+    n;
+    changeReason ?  : string;
+    n;
+    changedBy: string;
+    n;
+    changeDate: Date;
+    n;
+}
+n;
+n;
+nexport;
+let ConfigurationAuditService = ConfigurationAuditService_1 = class ConfigurationAuditService {
+    configRepository;
+    auditRepository;
+    eventEmitter;
+    n;
+    logger = new common_1.Logger(ConfigurationAuditService_1.name);
+    n;
+    n;
+    constructor(n, , n, configRepository, n, n, , n, auditRepository, n, n, eventEmitter, n) {
+        this.configRepository = configRepository;
+        this.auditRepository = auditRepository;
+        this.eventEmitter = eventEmitter;
+    }
+    n;
+    n;
+}; // ===== CONFIGURATION AUDIT METHODS =====\n\n  async logConfigurationChange(change: ConfigurationChange): Promise<void> {\n    try {\n      // Create audit log entry in configuration\n      await this.configRepository.update(change.configurationId, {\n        previousValue: typeof change.previousValue === 'string' \n          ? change.previousValue \n          : JSON.stringify(change.previousValue),\n        changeReason: change.changeReason,\n        lastChangedDate: change.changeDate,\n        changeFrequency: () => 'change_frequency + 1',\n      });\n\n      // Emit audit event\n      this.eventEmitter.emit('configuration.audit.logged', {\n        configurationId: change.configurationId,\n        actionType: 'UPDATE',\n        actionDescription: `Configuration '${change.key}' updated`,\n        oldValues: change.previousValue,\n        newValues: change.newValue,\n        actionBy: change.changedBy,\n      });\n\n      this.logger.log(`Logged configuration change for ${change.key}`);\n    } catch (error) {\n      this.logger.error(`Failed to log configuration change: ${error.message}`);\n    }\n  }\n\n  async getConfigurationHistory(\n    configurationId: string,\n    limit: number = 50\n  ): Promise<any[]> {\n    // This would typically query a dedicated audit table\n    // For now, we'll return basic change information from the configuration entity\n    const config = await this.configRepository.findOne({\n      where: { id: configurationId },\n    });\n\n    if (!config) {\n      return [];\n    }\n\n    return [\n      {\n        date: config.updatedAt,\n        action: 'UPDATE',\n        changedBy: config.updatedBy,\n        previousValue: config.previousValue,\n        currentValue: config.value || config.jsonValue,\n        changeReason: config.changeReason,\n      },\n    ];\n  }\n\n  async getConfigurationChangesByUser(\n    userId: string,\n    fromDate?: Date,\n    toDate?: Date,\n    limit: number = 100\n  ): Promise<Configuration[]> {\n    const query = this.configRepository.createQueryBuilder('config')\n      .where('config.updatedBy = :userId', { userId })\n      .orderBy('config.updatedAt', 'DESC')\n      .limit(limit);\n\n    if (fromDate) {\n      query.andWhere('config.updatedAt >= :fromDate', { fromDate });\n    }\n\n    if (toDate) {\n      query.andWhere('config.updatedAt <= :toDate', { toDate });\n    }\n\n    return query.getMany();\n  }\n\n  async getHighImpactChanges(\n    fromDate?: Date,\n    toDate?: Date\n  ): Promise<Configuration[]> {\n    const query = this.configRepository.createQueryBuilder('config')\n      .where('config.impactLevel IN (:...impacts)', { impacts: ['HIGH', 'CRITICAL'] })\n      .andWhere('config.lastChangedDate IS NOT NULL')\n      .orderBy('config.lastChangedDate', 'DESC');\n\n    if (fromDate) {\n      query.andWhere('config.lastChangedDate >= :fromDate', { fromDate });\n    }\n\n    if (toDate) {\n      query.andWhere('config.lastChangedDate <= :toDate', { toDate });\n    }\n\n    return query.getMany();\n  }\n\n  // ===== PRICE BUILDUP AUDIT METHODS =====\n\n  async logPriceBuildupAudit(auditEvent: AuditEvent): Promise<void> {\n    try {\n      const audit = this.auditRepository.create({\n        buildupVersionId: auditEvent.buildupVersionId,\n        componentId: auditEvent.componentId,\n        actionType: auditEvent.actionType,\n        actionDescription: auditEvent.actionDescription,\n        oldValues: auditEvent.oldValues,\n        newValues: auditEvent.newValues,\n        actionBy: auditEvent.actionBy,\n        actionDate: new Date(),\n        ipAddress: auditEvent.ipAddress,\n        userAgent: auditEvent.userAgent,\n        sessionId: auditEvent.sessionId,\n      });\n\n      await this.auditRepository.save(audit);\n      \n      this.logger.log(`Logged price buildup audit: ${auditEvent.actionType} - ${auditEvent.actionDescription}`);\n    } catch (error) {\n      this.logger.error(`Failed to log price buildup audit: ${error.message}`);\n    }\n  }\n\n  async getPriceBuildupAuditTrail(\n    buildupVersionId?: string,\n    componentId?: string,\n    actionType?: string,\n    actionBy?: string,\n    fromDate?: Date,\n    toDate?: Date,\n    limit: number = 100\n  ): Promise<PriceBuildupAuditTrail[]> {\n    const query = this.auditRepository.createQueryBuilder('audit')\n      .orderBy('audit.actionDate', 'DESC')\n      .limit(limit);\n\n    if (buildupVersionId) {\n      query.andWhere('audit.buildupVersionId = :buildupVersionId', { buildupVersionId });\n    }\n\n    if (componentId) {\n      query.andWhere('audit.componentId = :componentId', { componentId });\n    }\n\n    if (actionType) {\n      query.andWhere('audit.actionType = :actionType', { actionType });\n    }\n\n    if (actionBy) {\n      query.andWhere('audit.actionBy = :actionBy', { actionBy });\n    }\n\n    if (fromDate) {\n      query.andWhere('audit.actionDate >= :fromDate', { fromDate });\n    }\n\n    if (toDate) {\n      query.andWhere('audit.actionDate <= :toDate', { toDate });\n    }\n\n    return query.getMany();\n  }\n\n  async getAuditStatistics(\n    fromDate?: Date,\n    toDate?: Date\n  ): Promise<{\n    totalChanges: number;\n    changesByType: Record<string, number>;\n    changesByUser: Record<string, number>;\n    changesByModule: Record<string, number>;\n  }> {\n    const query = this.auditRepository.createQueryBuilder('audit');\n\n    if (fromDate) {\n      query.andWhere('audit.actionDate >= :fromDate', { fromDate });\n    }\n\n    if (toDate) {\n      query.andWhere('audit.actionDate <= :toDate', { toDate });\n    }\n\n    const [totalChanges, auditRecords] = await Promise.all([\n      query.getCount(),\n      query.getMany(),\n    ]);\n\n    const changesByType = auditRecords.reduce((acc, record) => {\n      acc[record.actionType] = (acc[record.actionType] || 0) + 1;\n      return acc;\n    }, {} as Record<string, number>);\n\n    const changesByUser = auditRecords.reduce((acc, record) => {\n      acc[record.actionBy] = (acc[record.actionBy] || 0) + 1;\n      return acc;\n    }, {} as Record<string, number>);\n\n    // For modules, we would need to join with configuration or buildup tables\n    const changesByModule = { 'PRICING_BUILDUP': totalChanges };\n\n    return {\n      totalChanges,\n      changesByType,\n      changesByUser,\n      changesByModule,\n    };\n  }\n\n  // ===== EVENT HANDLERS =====\n\n  @OnEvent('configuration.created')\n  async handleConfigurationCreated(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      configurationId: event.configurationId,\n      actionType: 'CREATE',\n      actionDescription: `Configuration '${event.key}' created in module '${event.module}'`,\n      newValues: { key: event.key, module: event.module, tenantId: event.tenantId },\n      actionBy: 'system',\n    });\n  }\n\n  @OnEvent('configuration.updated')\n  async handleConfigurationUpdated(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      configurationId: event.configurationId,\n      actionType: 'UPDATE',\n      actionDescription: `Configuration '${event.key}' updated`,\n      oldValues: event.previousValue,\n      newValues: event.newValue,\n      actionBy: 'system',\n    });\n  }\n\n  @OnEvent('configuration.deleted')\n  async handleConfigurationDeleted(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      configurationId: event.configurationId,\n      actionType: 'DELETE',\n      actionDescription: `Configuration '${event.key}' deleted`,\n      oldValues: { key: event.key, module: event.module, tenantId: event.tenantId },\n      actionBy: 'system',\n    });\n  }\n\n  @OnEvent('price-buildup.created')\n  async handlePriceBuildupCreated(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      buildupVersionId: event.buildupVersionId,\n      actionType: 'CREATE',\n      actionDescription: `Price buildup version ${event.versionNumber} created for ${event.productType}`,\n      newValues: { productType: event.productType, versionNumber: event.versionNumber },\n      actionBy: event.createdBy,\n    });\n  }\n\n  @OnEvent('price-buildup.approved')\n  async handlePriceBuildupApproved(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      buildupVersionId: event.buildupVersionId,\n      actionType: 'APPROVE',\n      actionDescription: `Price buildup for ${event.productType} approved${event.published ? ' and published' : ''}`,\n      newValues: { approved: true, published: event.published },\n      actionBy: event.approvedBy,\n    });\n  }\n\n  @OnEvent('price-buildup.published')\n  async handlePriceBuildupPublished(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      buildupVersionId: event.buildupVersionId,\n      actionType: 'PUBLISH',\n      actionDescription: `Price buildup for ${event.productType} published`,\n      newValues: { published: true, publishDate: event.publishDate },\n      actionBy: event.publishedBy,\n    });\n  }\n\n  @OnEvent('station-type-config.created')\n  async handleStationTypeConfigCreated(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      actionType: 'CREATE',\n      actionDescription: `Station type configuration created for ${event.stationType}`,\n      newValues: { stationType: event.stationType },\n      actionBy: event.createdBy,\n    });\n  }\n\n  @OnEvent('station-type-config.updated')\n  async handleStationTypeConfigUpdated(event: any): Promise<void> {\n    await this.logPriceBuildupAudit({\n      actionType: 'UPDATE',\n      actionDescription: `Station type configuration updated for ${event.stationType}`,\n      newValues: event.changes,\n      actionBy: event.updatedBy,\n    });\n  }\n\n  // ===== COMPLIANCE AND REPORTING =====\n\n  async generateComplianceReport(\n    fromDate: Date,\n    toDate: Date\n  ): Promise<{\n    totalChanges: number;\n    criticalChanges: number;\n    unapprovedChanges: number;\n    changesByDay: Record<string, number>;\n    topUsers: Array<{ user: string; changes: number }>;\n  }> {\n    const auditRecords = await this.getPriceBuildupAuditTrail(\n      undefined, undefined, undefined, undefined, fromDate, toDate, 10000\n    );\n\n    const totalChanges = auditRecords.length;\n    const criticalChanges = auditRecords.filter(r => \n      ['APPROVE', 'PUBLISH', 'DELETE'].includes(r.actionType)\n    ).length;\n    \n    // This would need to be enhanced with proper approval tracking\n    const unapprovedChanges = 0;\n\n    const changesByDay = auditRecords.reduce((acc, record) => {\n      const day = record.actionDate.toISOString().split('T')[0];\n      acc[day] = (acc[day] || 0) + 1;\n      return acc;\n    }, {} as Record<string, number>);\n\n    const userChanges = auditRecords.reduce((acc, record) => {\n      acc[record.actionBy] = (acc[record.actionBy] || 0) + 1;\n      return acc;\n    }, {} as Record<string, number>);\n\n    const topUsers = Object.entries(userChanges)\n      .sort(([, a], [, b]) => b - a)\n      .slice(0, 10)\n      .map(([user, changes]) => ({ user, changes }));\n\n    return {\n      totalChanges,\n      criticalChanges,\n      unapprovedChanges,\n      changesByDay,\n      topUsers,\n    };\n  }\n\n  async exportAuditTrail(\n    format: 'json' | 'csv' | 'excel',\n    fromDate?: Date,\n    toDate?: Date\n  ): Promise<string | Buffer> {\n    const auditRecords = await this.getPriceBuildupAuditTrail(\n      undefined, undefined, undefined, undefined, fromDate, toDate, 10000\n    );\n\n    switch (format) {\n      case 'json':\n        return JSON.stringify(auditRecords, null, 2);\n      \n      case 'csv':\n        const csvHeader = 'Date,Action,Description,User,Old Values,New Values\\n';\n        const csvRows = auditRecords.map(record => \n          `${record.actionDate.toISOString()},${record.actionType},\"${record.actionDescription}\",${record.actionBy},\"${JSON.stringify(record.oldValues || {})}\",\"${JSON.stringify(record.newValues || {})}\"`\n        ).join('\\n');\n        return csvHeader + csvRows;\n      \n      case 'excel':\n        // Would need to implement Excel export using a library like exceljs\n        throw new Error('Excel export not implemented yet');\n      \n      default:\n        throw new Error('Unsupported export format');\n    }\n  }\n}"
+ConfigurationAuditService = ConfigurationAuditService_1 = __decorate([
+    __param(1, InjectRepository(Configuration)),
+    __param(6, InjectRepository(PriceBuildupAuditTrail)),
+    __metadata("design:paramtypes", [Object, Object, Object, typeof (_a = typeof Repository !== "undefined" && Repository) === "function" ? _a : Object, Object, Object, Object, Object, typeof (_b = typeof Repository !== "undefined" && Repository) === "function" ? _b : Object, Object, Object, typeof (_c = typeof EventEmitter2 !== "undefined" && EventEmitter2) === "function" ? _c : Object, Object])
+], ConfigurationAuditService);
+//# sourceMappingURL=configuration-audit.service.js.map

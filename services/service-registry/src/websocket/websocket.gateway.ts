@@ -7,7 +7,7 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Logger, UseGuards } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { EventBusService } from '../event-bus/event-bus.service';
 import { ServiceRegistryService } from '../service-registry/service-registry.service';
@@ -21,15 +21,19 @@ interface AuthenticatedSocket extends Socket {
 
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:3000', 'http://localhost:3001'],
+    origin: [
+      'http://localhost:5000',
+      'http://localhost:3001',
+      'http://localhost:3000'
+    ],
     methods: ['GET', 'POST'],
     credentials: true,
   },
   namespace: '/ws',
 })
-export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class ServiceRegistryWebSocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
-  private readonly logger = new Logger(WebSocketGateway.name);
+  private readonly logger = new Logger(ServiceRegistryWebSocketGateway.name);
   private connectedClients = new Map<string, AuthenticatedSocket>();
   private clientSubscriptions = new Map<string, Set<string>>(); // clientId -> subscribed channels
 
@@ -67,7 +71,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       await this.sendSystemStatus(client);
 
     } catch (error) {
-      this.logger.error(`Error during client connection: ${error.message}`);
+      this.logger.error(`Error during client connection: ${(error as Error).message}`);
       client.disconnect();
     }
   }
@@ -160,7 +164,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     } catch (error) {
       client.emit('error', {
         message: 'Failed to get service status',
-        error: error.message,
+        error: (error as Error).message,
         timestamp: new Date(),
       });
     }
@@ -187,7 +191,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     } catch (error) {
       client.emit('error', {
         message: 'Failed to get system dashboard',
-        error: error.message,
+        error: (error as Error).message,
         timestamp: new Date(),
       });
     }
@@ -207,7 +211,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       this.logger.debug(`Broadcasted event ${event.type} to channel ${channel}`);
     } catch (error) {
-      this.logger.error(`Failed to broadcast system event: ${error.message}`);
+      this.logger.error(`Failed to broadcast system event: ${(error as Error).message}`);
     }
   }
 
@@ -225,7 +229,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       this.logger.debug(`Broadcasted service update for ${service.name}`);
     } catch (error) {
-      this.logger.error(`Failed to broadcast service update: ${error.message}`);
+      this.logger.error(`Failed to broadcast service update: ${(error as Error).message}`);
     }
   }
 
@@ -249,7 +253,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       this.logger.debug(`Sent ${alert.severity} alert: ${alert.title}`);
     } catch (error) {
-      this.logger.error(`Failed to send alert: ${error.message}`);
+      this.logger.error(`Failed to send alert: ${(error as Error).message}`);
     }
   }
 
@@ -268,7 +272,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         timestamp: new Date(),
       });
     } catch (error) {
-      this.logger.error(`Failed to broadcast metrics update: ${error.message}`);
+      this.logger.error(`Failed to broadcast metrics update: ${(error as Error).message}`);
     }
   }
 
@@ -290,7 +294,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       client.emit('system_status', systemStatus);
     } catch (error) {
-      this.logger.error(`Failed to send system status: ${error.message}`);
+      this.logger.error(`Failed to send system status: ${(error as Error).message}`);
     }
   }
 
@@ -312,7 +316,7 @@ export class WebSocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       this.sendAlert({
         severity: event.data.severity || 'medium',
         title: 'System Alert',
-        message: event.data.message || event.message,
+        message: event.data.message || (event.data as any).message,
         service: event.data.serviceId,
         data: event.data,
       });

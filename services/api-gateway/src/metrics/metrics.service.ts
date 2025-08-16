@@ -217,12 +217,12 @@ export class MetricsService {
         daily: {
           requests: metrics[0] || 0,
           errors: metrics[1] || 0,
-          errorRate: metrics[0] ? (metrics[1] / metrics[0] * 100).toFixed(2) : 0,
+          errorRate: metrics[0] ? ((metrics[1] as number) / (metrics[0] as number) * 100).toFixed(2) : 0,
         },
         hourly: {
           requests: metrics[2] || 0,
           errors: metrics[3] || 0,
-          errorRate: metrics[2] ? (metrics[3] / metrics[2] * 100).toFixed(2) : 0,
+          errorRate: metrics[2] ? ((metrics[3] as number) / (metrics[2] as number) * 100).toFixed(2) : 0,
         },
         timestamp: now.toISOString(),
       };

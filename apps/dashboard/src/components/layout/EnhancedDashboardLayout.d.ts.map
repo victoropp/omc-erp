@@ -1,0 +1,1 @@
+{"version":3,"file":"EnhancedDashboardLayout.d.ts","sourceRoot":"","sources":["EnhancedDashboardLayout.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAmB,MAAM,OAAO,CAAC;AAMxC,UAAU,4BAA4B;IACpC,QAAQ,EAAE,KAAK,CAAC,SAAS,CAAC;IAC1B,SAAS,CAAC,EAAE,MAAM,CAAC;IACnB,eAAe,CAAC,EAAE,OAAO,CAAC;CAC3B;AAED,wBAAgB,uBAAuB,CAAC,EACtC,QAAQ,EACR,SAAS,EACT,eAAsB,EACvB,EAAE,4BAA4B,qBAiH9B"}

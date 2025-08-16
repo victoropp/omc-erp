@@ -257,7 +257,7 @@ export class DealerManagementController {
 
   @Patch('settlements/:settlementId/approve')
   @ApiOperation({ summary: 'Approve a dealer settlement' })
-  @ApiParam({ name: 'settlementId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'settlementId', type: 'string',  })
   async approveSettlement(
     @Param('settlementId', ParseUUIDPipe) settlementId: string,
     @Query('tenantId', ParseUUIDPipe) tenantId: string,
@@ -277,7 +277,7 @@ export class DealerManagementController {
 
   @Patch('settlements/:settlementId/process-payment')
   @ApiOperation({ summary: 'Process payment for approved settlement' })
-  @ApiParam({ name: 'settlementId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'settlementId', type: 'string',  })
   async processSettlementPayment(
     @Param('settlementId', ParseUUIDPipe) settlementId: string,
     @Body() body: { paymentReference: string; paymentMethod: string; tenantId: string; userId?: string },
@@ -298,11 +298,11 @@ export class DealerManagementController {
 
   @Get('settlements')
   @ApiOperation({ summary: 'Get dealer settlements with filtering options' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   @ApiQuery({ name: 'status', enum: DealerSettlementStatus, required: false })
-  @ApiQuery({ name: 'fromDate', type: 'string', format: 'date', required: false })
-  @ApiQuery({ name: 'toDate', type: 'string', format: 'date', required: false })
+  @ApiQuery({ name: 'fromDate', type: 'string', required: false })
+  @ApiQuery({ name: 'toDate', type: 'string', required: false })
   @ApiQuery({ name: 'limit', type: 'number', required: false })
   async getDealerSettlements(
     @Query('stationId', ParseUUIDPipe) stationId: string,
@@ -393,9 +393,9 @@ export class DealerManagementController {
 
   @Get('loans/active')
   @ApiOperation({ summary: 'Get active loans for a station' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'dealerId', type: 'string', format: 'uuid', required: false })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
+  @ApiQuery({ name: 'dealerId', type: 'string', required: false })
   async getActiveLoans(
     @Query('stationId', ParseUUIDPipe) stationId: string,
     @Query('tenantId', ParseUUIDPipe) tenantId: string,
@@ -411,8 +411,8 @@ export class DealerManagementController {
 
   @Get('loans/monthly-obligation')
   @ApiOperation({ summary: 'Calculate total monthly loan obligations for a station' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   async getMonthlyObligation(
     @Query('stationId', ParseUUIDPipe) stationId: string,
     @Query('tenantId', ParseUUIDPipe) tenantId: string,
@@ -452,9 +452,9 @@ export class DealerManagementController {
 
   @Get('margins/daily-summary')
   @ApiOperation({ summary: 'Get daily margin accrual summary' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'accrualDate', type: 'string', format: 'date' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'accrualDate', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   async getDailyMarginSummary(
     @Query('stationId', ParseUUIDPipe) stationId: string,
     @Query('accrualDate') accrualDate: string,
@@ -474,9 +474,9 @@ export class DealerManagementController {
 
   @Get('margins/window-summary')
   @ApiOperation({ summary: 'Get window-level margin accrual summary' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
   @ApiQuery({ name: 'windowId', type: 'string' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   async getWindowMarginSummary(
     @Query('stationId', ParseUUIDPipe) stationId: string,
     @Query('windowId') windowId: string,
@@ -496,8 +496,8 @@ export class DealerManagementController {
 
   @Get('margins/trends')
   @ApiOperation({ summary: 'Get margin accrual trends' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   @ApiQuery({ name: 'periodDays', type: 'number', required: false })
   async getMarginTrends(
     @Query('stationId', ParseUUIDPipe) stationId: string,
@@ -518,7 +518,7 @@ export class DealerManagementController {
 
   @Patch('margins/:accrualId/adjust')
   @ApiOperation({ summary: 'Adjust margin accrual amount' })
-  @ApiParam({ name: 'accrualId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'accrualId', type: 'string',  })
   async adjustMarginAccrual(
     @Param('accrualId', ParseUUIDPipe) accrualId: string,
     @Body() body: { adjustmentAmount: number; adjustmentReason: string; tenantId: string; userId?: string },
@@ -541,9 +541,9 @@ export class DealerManagementController {
 
   @Get('performance/metrics')
   @ApiOperation({ summary: 'Get comprehensive dealer performance metrics' })
-  @ApiQuery({ name: 'dealerId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'dealerId', type: 'string',  })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   @ApiQuery({ name: 'evaluationPeriodDays', type: 'number', required: false })
   async getPerformanceMetrics(
     @Query('dealerId', ParseUUIDPipe) dealerId: string,
@@ -566,9 +566,9 @@ export class DealerManagementController {
 
   @Get('performance/credit-risk')
   @ApiOperation({ summary: 'Generate credit risk model and scoring' })
-  @ApiQuery({ name: 'dealerId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'dealerId', type: 'string',  })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   async getCreditRiskModel(
     @Query('dealerId', ParseUUIDPipe) dealerId: string,
     @Query('stationId', ParseUUIDPipe) stationId: string,
@@ -588,9 +588,9 @@ export class DealerManagementController {
 
   @Get('performance/trends')
   @ApiOperation({ summary: 'Get performance trends for a dealer' })
-  @ApiQuery({ name: 'dealerId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'dealerId', type: 'string',  })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   @ApiQuery({ name: 'metricType', enum: ['SALES_VOLUME', 'MARGIN_EARNED', 'PAYMENT_RELIABILITY', 'DEBT_RATIO'] })
   @ApiQuery({ name: 'periodDays', type: 'number', required: false })
   async getPerformanceTrends(
@@ -616,9 +616,9 @@ export class DealerManagementController {
 
   @Get('performance/recommendations')
   @ApiOperation({ summary: 'Generate performance recommendations' })
-  @ApiQuery({ name: 'dealerId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'stationId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
+  @ApiQuery({ name: 'dealerId', type: 'string',  })
+  @ApiQuery({ name: 'stationId', type: 'string',  })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
   async getPerformanceRecommendations(
     @Query('dealerId', ParseUUIDPipe) dealerId: string,
     @Query('stationId', ParseUUIDPipe) stationId: string,
@@ -712,7 +712,7 @@ export class DealerManagementController {
 
   @Post('payments/execute-batch/:batchId')
   @ApiOperation({ summary: 'Execute a payment batch' })
-  @ApiParam({ name: 'batchId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'batchId', type: 'string',  })
   async executePaymentBatch(
     @Param('batchId', ParseUUIDPipe) batchId: string,
     @Body() body: { tenantId: string; userId: string },
@@ -753,9 +753,9 @@ export class DealerManagementController {
 
   @Get('payments/report')
   @ApiOperation({ summary: 'Generate payment report' })
-  @ApiQuery({ name: 'tenantId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'periodStart', type: 'string', format: 'date' })
-  @ApiQuery({ name: 'periodEnd', type: 'string', format: 'date' })
+  @ApiQuery({ name: 'tenantId', type: 'string',  })
+  @ApiQuery({ name: 'periodStart', type: 'string',  })
+  @ApiQuery({ name: 'periodEnd', type: 'string',  })
   async generatePaymentReport(
     @Query('tenantId', ParseUUIDPipe) tenantId: string,
     @Query('periodStart') periodStart: string,
@@ -775,7 +775,7 @@ export class DealerManagementController {
 
   @Post('payments/retry-failed/:batchId')
   @ApiOperation({ summary: 'Retry failed payments from a batch' })
-  @ApiParam({ name: 'batchId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'batchId', type: 'string',  })
   async retryFailedPayments(
     @Param('batchId', ParseUUIDPipe) batchId: string,
     @Body() body: { tenantId: string; userId: string },

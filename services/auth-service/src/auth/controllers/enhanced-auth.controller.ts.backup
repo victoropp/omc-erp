@@ -1,0 +1,650 @@
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  UseGuards,
+  Request,
+  HttpCode,
+  HttpStatus,
+  Query,
+  Param,
+  Delete,
+  Put,
+  Req,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { AuthService } from '../auth.service';
+import { MfaService } from '../services/mfa.service';
+import { RbacService } from '../services/rbac.service';
+import { OAuthService, OAuthProvider } from '../services/oauth.service';
+import { JwtAuthGuard } from '../guards/jwt-auth.guard';
+import { RolesGuard } from '../guards/roles.guard';
+import { PermissionsGuard } from '../guards/permissions.guard';
+import { ThrottlerGuard } from '@nestjs/throttler';
+import { Roles } from '../decorators/roles.decorator';
+import { Permissions } from '../decorators/permissions.decorator';
+import {
+  SetupMfaDto,
+  VerifyMfaSetupDto,
+  DisableMfaDto,
+  VerifyMfaDto,
+  GenerateBackupCodesDto,
+} from '../dto/mfa.dto';
+import {
+  OAuthCallbackDto,
+  LinkOAuthAccountDto,
+  UnlinkOAuthAccountDto,
+} from '../dto/oauth.dto';
+import {
+  CreateRoleDto,
+  UpdateRoleDto,
+  AssignRoleDto,
+  RemoveRoleDto,
+} from '../dto/rbac.dto';
+import { LoginDto } from '../dto/login.dto';
+import { RegisterDto } from '../dto/register.dto';
+
+@ApiTags('Enhanced Authentication')
+@Controller('auth/v2')
+@UseGuards(ThrottlerGuard)
+export class EnhancedAuthController {
+  constructor(
+    private readonly authService: AuthService,
+    private readonly mfaService: MfaService,
+    private readonly rbacService: RbacService,
+    private readonly oauthService: OAuthService,
+  ) {}
+
+  // ===== BASIC AUTH OPERATIONS =====
+  @Post('register')
+  @ApiOperation({ summary: 'Register a new user with enhanced security' })
+  @ApiResponse({ status: 201, description: 'User registered successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid input or user already exists' })
+  async register(@Body() registerDto: RegisterDto) {
+    const result = await this.authService.register(registerDto);
+    return {
+      ...result,
+      securityInfo: {
+        passwordStrengthPassed: true,
+        emailVerificationRequired: true,
+        mfaRecommended: true,
+      },
+    };
+  }
+
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Login with email/password and optional MFA' })
+  @ApiResponse({ status: 200, description: 'Login successful or MFA required' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials or account locked' })
+  @ApiResponse({ status: 429, description: 'Too many login attempts' })
+  async login(@Body() loginDto: LoginDto, @Req() req: any) {
+    const ip = req.ip || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    
+    // First validate user credentials
+    const user = await this.authService.validateUser(loginDto.email, loginDto.password);
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    
+    const result = await this.authService.login(user);
+    
+    // Add security headers and information
+    return {
+      ...result,
+      loginInfo: {
+        ip,
+        timestamp: new Date().toISOString(),
+        deviceTrustScore: this.calculateDeviceTrustScore(req),
+        securityRecommendations: this.getSecurityRecommendations(result.user),
+      },
+    };
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout user and invalidate session' })
+  @ApiResponse({ status: 204, description: 'Logout successful' })
+  async logout(@Request() req: any) {
+    await this.authService.logout(req.user.sub);
+    return { message: 'Logged out successfully' };
+  }
+
+  @Post('logout-all')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout from all devices' })
+  @ApiResponse({ status: 204, description: 'All sessions terminated' })
+  async logoutAll(@Request() req: any) {
+    await this.authService.logout(req.user.sub); // No sessionId = logout all
+    return { message: 'All sessions terminated' };
+  }
+
+  // ===== MFA OPERATIONS =====
+  @Post('mfa/setup')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Setup Multi-Factor Authentication' })
+  @ApiResponse({ status: 200, description: 'MFA setup initiated' })
+  async setupMfa(@Request() req: any, @Body() setupDto: SetupMfaDto) {
+    // Verify current password first
+    const user = await this.authService.verifyCurrentPassword(req.user.sub, setupDto.currentPassword);
+    
+    const mfaSetup = await this.mfaService.generateMfaSetup(req.user.sub, req.user.email);
+    
+    return {
+      ...mfaSetup,
+      instructions: {
+        step1: 'Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)',
+        step2: 'Enter the 6-digit code from your app to verify setup',
+        step3: 'Save your backup codes in a secure location',
+      },
+    };
+  }
+
+  @Post('mfa/verify-setup')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Verify and enable MFA setup' })
+  @ApiResponse({ status: 200, description: 'MFA enabled successfully' })
+  async verifyMfaSetup(@Request() req: any, @Body() verifyDto: VerifyMfaSetupDto) {
+    const result = await this.mfaService.verifyMfaSetup(req.user.sub, verifyDto.token);
+    
+    // Update user MFA status in auth service
+    await this.authService.enableUserMfa(req.user.sub, result.secret, result.backupCodes);
+    
+    return {
+      message: 'MFA enabled successfully',
+      backupCodes: result.backupCodes,
+      warning: 'Store these backup codes securely. They can only be used once.',
+    };
+  }
+
+  @Post('mfa/verify')
+  @ApiOperation({ summary: 'Verify MFA token during login' })
+  @ApiResponse({ status: 200, description: 'MFA verification successful' })
+  async verifyMfa(@Body() verifyDto: VerifyMfaDto, @Req() req: any) {
+    const sessionData = await this.mfaService.getMfaSession(verifyDto.mfaSessionToken);
+    
+    if (!sessionData) {
+      throw new UnauthorizedException('Invalid or expired MFA session');
+    }
+
+    const user = await this.authService.getUserById(sessionData.userId);
+    const verification = await this.mfaService.verifyMfaToken(
+      user.mfaSecret,
+      verifyDto.token,
+      user.mfaBackupCodes
+    );
+
+    if (!verification.isValid) {
+      throw new UnauthorizedException('Invalid MFA token');
+    }
+
+    // Complete MFA session
+    await this.mfaService.completeMfaSession(verifyDto.mfaSessionToken);
+    
+    // If backup code was used, update user's backup codes
+    if (verification.backupCodeUsed) {
+      await this.authService.removeUsedBackupCode(sessionData.userId, verifyDto.token);
+    }
+
+    // Handle trusted device
+    let trustedDeviceId;
+    if (verifyDto.rememberDevice) {
+      const deviceFingerprint = this.mfaService.generateDeviceFingerprint(req);
+      trustedDeviceId = await this.mfaService.createTrustedDevice(sessionData.userId, deviceFingerprint);
+    }
+
+    // Generate final auth tokens
+    const tokens = await this.authService.generateTokensForUser(sessionData.userId);
+    
+    return {
+      ...tokens,
+      mfaVerified: true,
+      backupCodeUsed: verification.backupCodeUsed,
+      remainingBackupCodes: verification.remainingBackupCodes,
+      trustedDeviceId,
+    };
+  }
+
+  @Post('mfa/disable')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Disable Multi-Factor Authentication' })
+  @ApiResponse({ status: 200, description: 'MFA disabled successfully' })
+  async disableMfa(@Request() req: any, @Body() disableDto: DisableMfaDto) {
+    await this.authService.disableMfa(req.user.sub, disableDto.currentPassword, disableDto.mfaToken);
+    
+    return {
+      message: 'MFA disabled successfully',
+      warning: 'Your account is now less secure. Consider re-enabling MFA.',
+    };
+  }
+
+  @Post('mfa/backup-codes/generate')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Generate new backup codes' })
+  @ApiResponse({ status: 200, description: 'New backup codes generated' })
+  async generateBackupCodes(@Request() req: any, @Body() generateDto: GenerateBackupCodesDto) {
+    const user = await this.authService.verifyCurrentPassword(req.user.sub, generateDto.currentPassword);
+    
+    // Verify MFA token
+    const verification = await this.mfaService.verifyMfaToken(
+      user.mfaSecret,
+      generateDto.mfaToken
+    );
+
+    if (!verification.isValid) {
+      throw new UnauthorizedException('Invalid MFA token');
+    }
+
+    const newBackupCodes = await this.mfaService.generateNewBackupCodes();
+    await this.authService.updateBackupCodes(req.user.sub, newBackupCodes);
+    
+    return {
+      backupCodes: newBackupCodes,
+      message: 'New backup codes generated. Previous codes are no longer valid.',
+    };
+  }
+
+  // ===== OAUTH OPERATIONS =====
+  @Get('oauth/:provider/authorize')
+  @ApiOperation({ summary: 'Get OAuth authorization URL' })
+  @ApiParam({ name: 'provider', enum: OAuthProvider })
+  @ApiQuery({ name: 'redirect_uri', description: 'Redirect URI after authentication' })
+  async getOAuthAuthUrl(
+    @Param('provider') provider: OAuthProvider,
+    @Query('redirect_uri') redirectUri: string,
+    @Query('link_account') linkAccount?: string, // User ID if linking to existing account
+  ) {
+    const result = await this.oauthService.getAuthorizationUrl(
+      provider,
+      redirectUri,
+      linkAccount
+    );
+    
+    return {
+      ...result,
+      provider,
+      instructions: `Visit the authorization URL to authenticate with ${provider}`,
+    };
+  }
+
+  @Post('oauth/:provider/callback')
+  @ApiOperation({ summary: 'Handle OAuth callback' })
+  @ApiParam({ name: 'provider', enum: OAuthProvider })
+  async handleOAuthCallback(
+    @Param('provider') provider: OAuthProvider,
+    @Body() callbackDto: OAuthCallbackDto,
+    @Req() req: any,
+  ) {
+    const result = await this.oauthService.handleCallback(
+      provider,
+      callbackDto.code,
+      callbackDto.state
+    );
+
+    if (result.isNewUser) {
+      // Create new user from OAuth info
+      const newUser = await this.authService.createUserFromOAuth(result.userInfo);
+      const tokens = await this.authService.generateTokensForUser(newUser.id);
+      
+      return {
+        ...tokens,
+        user: newUser,
+        isNewUser: true,
+        provider,
+        accountLinked: true,
+      };
+    } else {
+      // Login existing user
+      const tokens = await this.authService.generateTokensForUser(result.existingUserId!);
+      const user = await this.authService.getUserById(result.existingUserId!);
+      
+      return {
+        ...tokens,
+        user,
+        isNewUser: false,
+        provider,
+      };
+    }
+  }
+
+  @Post('oauth/:provider/link')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Link OAuth account to existing user' })
+  @ApiParam({ name: 'provider', enum: OAuthProvider })
+  async linkOAuthAccount(
+    @Param('provider') provider: OAuthProvider,
+    @Request() req: any,
+    @Body() linkDto: LinkOAuthAccountDto,
+  ) {
+    // Verify current password
+    await this.authService.verifyCurrentPassword(req.user.sub, linkDto.currentPassword);
+    
+    await this.oauthService.linkOAuthAccount(
+      req.user.sub,
+      provider,
+      linkDto.code,
+      req.headers.origin || 'http://localhost:3000'
+    );
+    
+    return {
+      message: `${provider} account linked successfully`,
+      provider,
+      linkedAt: new Date().toISOString(),
+    };
+  }
+
+  @Delete('oauth/:provider/unlink')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Unlink OAuth account' })
+  @ApiParam({ name: 'provider', enum: OAuthProvider })
+  async unlinkOAuthAccount(
+    @Param('provider') provider: OAuthProvider,
+    @Request() req: any,
+    @Body() unlinkDto: UnlinkOAuthAccountDto,
+  ) {
+    // Verify current password
+    await this.authService.verifyCurrentPassword(req.user.sub, unlinkDto.currentPassword);
+    
+    await this.oauthService.unlinkOAuthAccount(req.user.sub, provider);
+    
+    return {
+      message: `${provider} account unlinked successfully`,
+      provider,
+    };
+  }
+
+  @Get('oauth/accounts')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get linked OAuth accounts' })
+  async getOAuthAccounts(@Request() req: any) {
+    const accounts = await this.oauthService.getUserOAuthAccounts(req.user.sub);
+    
+    return {
+      accounts,
+      totalLinked: accounts.length,
+      availableProviders: Object.values(OAuthProvider),
+    };
+  }
+
+  // ===== RBAC OPERATIONS =====
+  @Post('roles')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create a new role (Admin only)' })
+  async createRole(@Body() createRoleDto: CreateRoleDto) {
+    const role = await this.rbacService.createRole(createRoleDto);
+    return {
+      role,
+      message: 'Role created successfully',
+    };
+  }
+
+  @Get('roles')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all roles' })
+  async getAllRoles() {
+    const roles = await this.rbacService.getAllRoles();
+    return {
+      roles,
+      totalRoles: roles.length,
+    };
+  }
+
+  @Put('roles/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update role (Admin only)' })
+  async updateRole(@Param('id') id: string, @Body() updateRoleDto: UpdateRoleDto) {
+    const role = await this.rbacService.updateRole(id, updateRoleDto);
+    return {
+      role,
+      message: 'Role updated successfully',
+    };
+  }
+
+  @Delete('roles/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete role (Admin only)' })
+  async deleteRole(@Param('id') id: string) {
+    await this.rbacService.deleteRole(id);
+    return {
+      message: 'Role deleted successfully',
+    };
+  }
+
+  @Post('users/roles/assign')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('users:write')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Assign role to user' })
+  async assignRole(@Body() assignRoleDto: AssignRoleDto, @Request() req: any) {
+    await this.rbacService.assignRoleToUser(
+      assignRoleDto.userId,
+      assignRoleDto.roleId,
+      req.user.sub
+    );
+    
+    return {
+      message: 'Role assigned successfully',
+    };
+  }
+
+  @Post('users/roles/remove')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('users:write')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Remove role from user' })
+  async removeRole(@Body() removeRoleDto: RemoveRoleDto) {
+    await this.rbacService.removeRoleFromUser(
+      removeRoleDto.userId,
+      removeRoleDto.roleId
+    );
+    
+    return {
+      message: 'Role removed successfully',
+    };
+  }
+
+  @Get('users/:id/roles')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get user roles' })
+  async getUserRoles(@Param('id') userId: string) {
+    const roles = await this.rbacService.getUserRoles(userId);
+    return {
+      userId,
+      roles,
+      totalRoles: roles.length,
+    };
+  }
+
+  @Get('users/:id/permissions')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('users:read')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get user permissions' })
+  async getUserPermissions(@Param('id') userId: string) {
+    const permissions = await this.rbacService.getUserPermissions(userId);
+    return {
+      userId,
+      permissions,
+      totalPermissions: permissions.length,
+    };
+  }
+
+  @Post('permissions/check')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Check user permission' })
+  async checkPermission(@Body() checkDto: CheckPermissionDto) {
+    const hasPermission = await this.rbacService.hasPermission(
+      checkDto.userId,
+      checkDto.permission,
+      checkDto.resource
+    );
+    
+    return {
+      userId: checkDto.userId,
+      permission: checkDto.permission,
+      resource: checkDto.resource,
+      hasPermission,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  // ===== ENHANCED PROFILE & SECURITY =====
+  @Get('profile/security')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get security overview' })
+  async getSecurityOverview(@Request() req: any) {
+    const user = await this.authService.getUserById(req.user.sub);
+    const oauthAccounts = await this.oauthService.getUserOAuthAccounts(req.user.sub);
+    const trustedDevices = await this.mfaService.getUserTrustedDevices(req.user.sub);
+    
+    return {
+      userId: req.user.sub,
+      security: {
+        mfaEnabled: user.mfaEnabled,
+        emailVerified: user.emailVerified,
+        passwordLastChanged: user.passwordUpdatedAt,
+        lastLoginAt: user.lastLoginAt,
+        failedLoginAttempts: user.failedLoginAttempts,
+        accountLocked: user.lockedUntil && user.lockedUntil > new Date(),
+      },
+      linkedAccounts: {
+        oauth: oauthAccounts,
+        totalLinked: oauthAccounts.length,
+      },
+      trustedDevices: {
+        devices: trustedDevices,
+        totalDevices: trustedDevices.length,
+      },
+      securityScore: this.calculateSecurityScore(user, oauthAccounts),
+      recommendations: this.getSecurityRecommendations(user),
+    };
+  }
+
+  @Get('sessions')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get active sessions' })
+  async getActiveSessions(@Request() req: any) {
+    const sessions = await this.authService.getUserSessions(req.user.sub);
+    
+    return {
+      userId: req.user.sub,
+      currentSessionId: req.user.sessionId,
+      activeSessions: sessions,
+      totalSessions: sessions.length,
+    };
+  }
+
+  @Delete('sessions/:sessionId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Terminate specific session' })
+  async terminateSession(@Param('sessionId') sessionId: string, @Request() req: any) {
+    await this.authService.terminateSession(req.user.sub, sessionId);
+    
+    return {
+      message: 'Session terminated successfully',
+      terminatedSessionId: sessionId,
+    };
+  }
+
+  // ===== UTILITY METHODS =====
+  private calculateDeviceTrustScore(req: any): number {
+    let score = 50; // Base score
+    
+    // Factors that increase trust
+    if (req.headers['user-agent']) score += 10;
+    if (req.headers['accept-language']) score += 5;
+    if (req.secure) score += 15; // HTTPS
+    if (req.headers['x-forwarded-for']) score -= 10; // Proxy usage
+    
+    return Math.min(100, Math.max(0, score));
+  }
+
+  private calculateSecurityScore(user: any, oauthAccounts: any[]): number {
+    let score = 0;
+    
+    // Base security factors
+    if (user.emailVerified) score += 20;
+    if (user.mfaEnabled) score += 30;
+    if (oauthAccounts.length > 0) score += 10;
+    if (!user.lockedUntil || user.lockedUntil < new Date()) score += 10;
+    if (user.failedLoginAttempts === 0) score += 10;
+    
+    // Password age factor
+    if (user.passwordUpdatedAt) {
+      const daysSinceUpdate = Math.floor(
+        (Date.now() - new Date(user.passwordUpdatedAt).getTime()) / (1000 * 60 * 60 * 24)
+      );
+      if (daysSinceUpdate < 90) score += 10;
+      else if (daysSinceUpdate > 365) score -= 10;
+    }
+    
+    // Recent activity factor
+    if (user.lastLoginAt) {
+      const daysSinceLogin = Math.floor(
+        (Date.now() - new Date(user.lastLoginAt).getTime()) / (1000 * 60 * 60 * 24)
+      );
+      if (daysSinceLogin < 7) score += 10;
+    }
+    
+    return Math.min(100, Math.max(0, score));
+  }
+
+  private getSecurityRecommendations(user: any): string[] {
+    const recommendations: string[] = [];
+    
+    if (!user.mfaEnabled) {
+      recommendations.push('Enable Multi-Factor Authentication for enhanced security');
+    }
+    
+    if (!user.emailVerified) {
+      recommendations.push('Verify your email address');
+    }
+    
+    if (user.passwordUpdatedAt) {
+      const daysSinceUpdate = Math.floor(
+        (Date.now() - new Date(user.passwordUpdatedAt).getTime()) / (1000 * 60 * 60 * 24)
+      );
+      if (daysSinceUpdate > 180) {
+        recommendations.push('Consider updating your password');
+      }
+    }
+    
+    if (user.failedLoginAttempts > 0) {
+      recommendations.push('Review recent login attempts for suspicious activity');
+    }
+    
+    if (recommendations.length === 0) {
+      recommendations.push('Your account security looks good!');
+    }
+    
+    return recommendations;
+  }
+}

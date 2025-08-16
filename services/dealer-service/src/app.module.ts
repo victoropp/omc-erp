@@ -22,13 +22,6 @@ import { DealerPaymentAutomationService } from './services/dealer-payment-automa
 // Controllers
 import { DealerManagementController } from './controllers/dealer-management.controller';
 
-// Legacy Modules (keeping for backwards compatibility)
-import { DealerOnboardingModule } from './onboarding/dealer-onboarding.module';
-import { HealthModule } from './health/health.module';
-
-// Shared Modules
-import { DatabaseModule } from './database/database.module';
-import { NotificationModule } from './notifications/notification.module';
 
 @Module({
   imports: [
@@ -44,7 +37,7 @@ import { NotificationModule } from './notifications/notification.module';
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
         host: config.get('DB_HOST', 'localhost'),
-        port: config.get('DB_PORT', 5432),
+        port: config.get('DB_PORT', 5434),
         username: config.get('DB_USERNAME', 'omc_erp'),
         password: config.get('DB_PASSWORD'),
         database: config.get('DB_NAME', 'omc_erp'),
@@ -89,13 +82,6 @@ import { NotificationModule } from './notifications/notification.module';
       DealerSettlement,
     ]),
 
-    // Core modules
-    DatabaseModule,
-    HealthModule,
-    NotificationModule,
-
-    // Legacy Feature modules (keeping for backwards compatibility)
-    DealerOnboardingModule,
   ],
   
   controllers: [

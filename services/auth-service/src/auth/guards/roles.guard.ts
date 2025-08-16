@@ -1,1 +1,33 @@
-import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';\nimport { Reflector } from '@nestjs/core';\nimport { RbacService } from '../services/rbac.service';\nimport { ROLES_KEY } from '../decorators/roles.decorator';\n\n@Injectable()\nexport class RolesGuard implements CanActivate {\n  constructor(\n    private reflector: Reflector,\n    private rbacService: RbacService,\n  ) {}\n\n  async canActivate(context: ExecutionContext): Promise<boolean> {\n    const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [\n      context.getHandler(),\n      context.getClass(),\n    ]);\n    \n    if (!requiredRoles) {\n      return true;\n    }\n\n    const { user } = context.switchToHttp().getRequest();\n    \n    if (!user) {\n      return false;\n    }\n\n    const userRoles = await this.rbacService.getUserRoles(user.sub);\n    const userRoleNames = userRoles.map(role => role.name);\n    \n    return requiredRoles.some(role => userRoleNames.includes(role));\n  }\n}"
+import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { RbacService } from '../services/rbac.service';
+import { ROLES_KEY } from '../decorators/roles.decorator';
+
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(
+    private reflector: Reflector,
+    private rbacService: RbacService,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    
+    if (!requiredRoles) {
+      return true;
+    }
+
+    const { user } = context.switchToHttp().getRequest();
+    
+    if (!user) {
+      return false;
+    }
+
+    const userRoles = await this.rbacService.getUserRoles(user.sub);
+    
+    return requiredRoles.some(role => userRoles.includes(role));
+  }
+}

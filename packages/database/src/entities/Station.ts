@@ -1,4 +1,4 @@
-import { Entity, Column, ManyToOne, OneToMany, JoinColumn, Index, Point } from 'typeorm';
+import { Entity, Column, ManyToOne, OneToMany, JoinColumn, Index } from 'typeorm';
 import { BaseEntity } from './BaseEntity';
 import { StationType, StationStatus, FuelType } from '@omc-erp/shared-types';
 import { Tenant } from './Tenant';

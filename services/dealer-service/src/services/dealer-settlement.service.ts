@@ -4,7 +4,7 @@ import { Repository, DataSource, Between } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DealerSettlement, DealerSettlementStatus } from '../entities/dealer-settlement.entity';
-import { DealerLoan } from '../entities/dealer-loan.entity';
+import { DealerLoan, DealerLoanStatus } from '../entities/dealer-loan.entity';
 import { DealerMarginAccrual, AccrualStatus } from '../entities/dealer-margin-accrual.entity';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -474,7 +474,7 @@ export class DealerSettlementService {
     
     // Get active loans for loan details
     const activeLoans = await this.loanRepository.find({
-      where: { stationId: settlement.stationId, tenantId, status: 'active' },
+      where: { stationId: settlement.stationId, tenantId, status: DealerLoanStatus.ACTIVE },
     });
 
     const statement: SettlementStatement = {
@@ -603,7 +603,7 @@ export class DealerSettlementService {
     }>;
   }> {
     const activeLoans = await this.loanRepository.find({
-      where: { stationId, tenantId, status: 'active' },
+      where: { stationId, tenantId, status: DealerLoanStatus.ACTIVE },
     });
 
     if (activeLoans.length === 0) {
@@ -669,7 +669,7 @@ export class DealerSettlementService {
     entityManager: any,
   ): Promise<void> {
     const activeLoans = await entityManager.find('DealerLoan', {
-      where: { stationId, tenantId, status: 'active' },
+      where: { stationId, tenantId, status: DealerLoanStatus.ACTIVE },
       order: { startDate: 'ASC' }, // Pay off older loans first
     });
 

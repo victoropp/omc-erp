@@ -1,1 +1,20 @@
-import { Module } from '@nestjs/common';\nimport { FinancialController } from './financial.controller';\nimport { FinancialService } from './financial.service';\nimport { GeneralLedgerController } from './controllers/general-ledger.controller';\nimport { JournalEntryController } from './controllers/journal-entry.controller';\nimport { FinancialReportingController } from './controllers/financial-reporting.controller';\nimport { FixedAssetsController } from './controllers/fixed-assets.controller';\nimport { TaxManagementController } from './controllers/tax-management.controller';\nimport { BudgetManagementController } from './controllers/budget-management.controller';\nimport { AccountsPayableController } from './controllers/accounts-payable.controller';\nimport { AccountsReceivableController } from './controllers/accounts-receivable.controller';\nimport { BankCashController } from './controllers/bank-cash.controller';\nimport { CostManagementController } from './controllers/cost-management.controller';\nimport { ProjectAccountingController } from './controllers/project-accounting.controller';\nimport { IfrsComplianceController } from './controllers/ifrs-compliance.controller';\nimport { PrepaymentController } from './controllers/prepayment.controller';\nimport { AccrualController } from './controllers/accrual.controller';\nimport { GeneralLedgerService } from './services/general-ledger.service';\nimport { JournalEntryService } from './services/journal-entry.service';\nimport { FinancialReportingService } from './services/financial-reporting.service';\nimport { FixedAssetsService } from './services/fixed-assets.service';\nimport { TaxManagementService } from './services/tax-management.service';\nimport { BudgetManagementService } from './services/budget-management.service';\nimport { AccountsPayableService } from './services/accounts-payable.service';\nimport { AccountsReceivableService } from './services/accounts-receivable.service';\nimport { BankCashService } from './services/bank-cash.service';\nimport { CostManagementService } from './services/cost-management.service';\nimport { ProjectAccountingService } from './services/project-accounting.service';\nimport { IfrsComplianceService } from './services/ifrs-compliance.service';\nimport { PrepaymentService } from './services/prepayment.service';\nimport { AccrualService } from './services/accrual.service';\nimport { HttpModule } from '@nestjs/axios';\n\n@Module({\n  imports: [HttpModule],\n  controllers: [\n    FinancialController,\n    GeneralLedgerController,\n    JournalEntryController,\n    FinancialReportingController,\n    FixedAssetsController,\n    TaxManagementController,\n    BudgetManagementController,\n    AccountsPayableController,\n    AccountsReceivableController,\n    BankCashController,\n    CostManagementController,\n    ProjectAccountingController,\n    IfrsComplianceController,\n    PrepaymentController,\n    AccrualController,\n  ],\n  providers: [\n    FinancialService,\n    GeneralLedgerService,\n    JournalEntryService,\n    FinancialReportingService,\n    FixedAssetsService,\n    TaxManagementService,\n    BudgetManagementService,\n    AccountsPayableService,\n    AccountsReceivableService,\n    BankCashService,\n    CostManagementService,\n    ProjectAccountingService,\n    IfrsComplianceService,\n    PrepaymentService,\n    AccrualService,\n  ],\n  exports: [FinancialService],\n})\nexport class FinancialModule {}"
+import { Module } from '@nestjs/common';
+import { FinancialController } from './financial.controller';
+import { FinancialService } from './financial.service';
+import { FixedAssetsController } from './controllers/fixed-assets.controller';
+import { FixedAssetsService } from './services/fixed-assets.service';
+import { HttpModule } from '@nestjs/axios';
+
+@Module({
+  imports: [HttpModule],
+  controllers: [
+    FinancialController,
+    FixedAssetsController,
+  ],
+  providers: [
+    FinancialService,
+    FixedAssetsService,
+  ],
+  exports: [FinancialService],
+})
+export class FinancialModule {}

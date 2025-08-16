@@ -1,10 +1,10 @@
-import { Injectable, Logger, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
+import { CacheService } from '../common/cache.service';
 import Redis from 'ioredis';
 import { v4 as uuidv4 } from 'uuid';
 import { PublishEventDto, SystemEvent, EventType, EventPriority } from './dto/event.dto';
+import { ServiceStatus } from '../service-registry/dto/register-service.dto';
 
 @Injectable()
 export class EventBusService implements OnModuleInit, OnModuleDestroy {
@@ -17,7 +17,7 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly configService: ConfigService,
-    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly cacheService: CacheService,
   ) {
     const redisConfig = {
       host: this.configService.get('REDIS_HOST', 'localhost'),
@@ -60,7 +60,7 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
 
       this.logger.log('Event bus initialized successfully');
     } catch (error) {
-      this.logger.error(`Failed to initialize event bus: ${error.message}`);
+      this.logger.error(`Failed to initialize event bus: ${(error as Error).message}`);
       throw error;
     }
   }
@@ -99,7 +99,7 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
       this.logger.debug(`Event published: ${event.type} (${event.id})`);
       return event.id;
     } catch (error) {
-      this.logger.error(`Failed to publish event: ${error.message}`);
+      this.logger.error(`Failed to publish event: ${(error as Error).message}`);
       throw error;
     }
   }
@@ -142,44 +142,52 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
    */
   async getEventHistory(
     limit: number = 100,
-    eventType?: EventType,
-    source?: string,
-    fromTimestamp?: Date,
-    toTimestamp?: Date
+    offset: number = 0,
+    filters?: {
+      type?: EventType;
+      priority?: EventPriority;
+      source?: string;
+      startDate?: Date;
+      endDate?: Date;
+    }
   ): Promise<SystemEvent[]> {
     try {
       // Get events from cache/storage
-      const events = await this.cacheManager.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
       
       let filteredEvents = events;
 
       // Apply filters
-      if (eventType) {
-        filteredEvents = filteredEvents.filter(event => event.type === eventType);
+      if (filters?.type) {
+        filteredEvents = filteredEvents.filter(event => event.type === filters.type);
       }
 
-      if (source) {
-        filteredEvents = filteredEvents.filter(event => event.source === source);
+      if (filters?.priority) {
+        filteredEvents = filteredEvents.filter(event => event.priority === filters.priority);
       }
 
-      if (fromTimestamp) {
+      if (filters?.source) {
+        filteredEvents = filteredEvents.filter(event => event.source === filters.source);
+      }
+
+      if (filters?.startDate) {
         filteredEvents = filteredEvents.filter(event => 
-          new Date(event.timestamp) >= fromTimestamp
+          new Date(event.timestamp) >= filters.startDate!
         );
       }
 
-      if (toTimestamp) {
+      if (filters?.endDate) {
         filteredEvents = filteredEvents.filter(event => 
-          new Date(event.timestamp) <= toTimestamp
+          new Date(event.timestamp) <= filters.endDate!
         );
       }
 
-      // Sort by timestamp (newest first) and limit
+      // Sort by timestamp (newest first), apply offset and limit
       return filteredEvents
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-        .slice(0, limit);
+        .slice(offset, offset + limit);
     } catch (error) {
-      this.logger.error(`Failed to get event history: ${error.message}`);
+      this.logger.error(`Failed to get event history: ${(error as Error).message}`);
       return [];
     }
   }
@@ -189,10 +197,10 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
    */
   async getEvent(eventId: string): Promise<SystemEvent | null> {
     try {
-      const events = await this.cacheManager.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
       return events.find(event => event.id === eventId) || null;
     } catch (error) {
-      this.logger.error(`Failed to get event ${eventId}: ${error.message}`);
+      this.logger.error(`Failed to get event ${eventId}: ${(error as Error).message}`);
       return null;
     }
   }
@@ -231,7 +239,7 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
             try {
               return handler(event);
             } catch (error) {
-              this.logger.error(`Event handler error: ${error.message}`);
+              this.logger.error(`Event handler error: ${(error as Error).message}`);
               return Promise.resolve();
             }
           })
@@ -242,7 +250,7 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
       await this.markEventAsProcessed(event.id);
 
     } catch (error) {
-      this.logger.error(`Failed to handle incoming event: ${error.message}`);
+      this.logger.error(`Failed to handle incoming event: ${(error as Error).message}`);
     }
   }
 
@@ -272,9 +280,9 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
    * Handle service health changes
    */
   private async handleServiceHealthChange(event: SystemEvent): Promise<void> {
-    const { serviceId, oldStatus, newStatus } = event.data;
+    const { serviceId, newStatus } = event.data;
     
-    if (newStatus === 'unhealthy' || newStatus === 'critical') {
+    if (newStatus === ServiceStatus.UNHEALTHY || newStatus === ServiceStatus.CRITICAL) {
       // Alert administrators
       await this.publishEvent({
         type: EventType.SYSTEM_ALERT,
@@ -311,7 +319,7 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
    */
   private async storeEvent(event: SystemEvent): Promise<void> {
     try {
-      const events = await this.cacheManager.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
       events.push(event);
 
       // Keep only the last 10000 events
@@ -319,10 +327,189 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
         events.splice(0, events.length - 10000);
       }
 
-      await this.cacheManager.set(this.EVENTS_KEY, events, 86400000); // 24 hours
+      await this.cacheService.set(this.EVENTS_KEY, events, 86400000); // 24 hours
     } catch (error) {
-      this.logger.error(`Failed to store event: ${error.message}`);
+      this.logger.error(`Failed to store event: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * Get event count
+   */
+  async getEventCount(filters?: {
+    type?: EventType;
+    priority?: EventPriority;
+    source?: string;
+    startDate?: Date;
+    endDate?: Date;
+  }): Promise<number> {
+    try {
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      let filteredEvents = events;
+
+      // Apply filters
+      if (filters?.type) {
+        filteredEvents = filteredEvents.filter(event => event.type === filters.type);
+      }
+
+      if (filters?.priority) {
+        filteredEvents = filteredEvents.filter(event => event.priority === filters.priority);
+      }
+
+      if (filters?.source) {
+        filteredEvents = filteredEvents.filter(event => event.source === filters.source);
+      }
+
+      if (filters?.startDate) {
+        filteredEvents = filteredEvents.filter(event => 
+          new Date(event.timestamp) >= filters.startDate!
+        );
+      }
+
+      if (filters?.endDate) {
+        filteredEvents = filteredEvents.filter(event => 
+          new Date(event.timestamp) <= filters.endDate!
+        );
+      }
+
+      return filteredEvents.length;
+    } catch (error) {
+      this.logger.error(`Failed to get event count: ${(error as Error).message}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Get events by type
+   */
+  async getEventsByType(): Promise<Record<EventType, number>> {
+    try {
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const counts: Record<EventType, number> = {} as Record<EventType, number>;
+      
+      Object.values(EventType).forEach(type => {
+        counts[type] = events.filter(event => event.type === type).length;
+      });
+
+      return counts;
+    } catch (error) {
+      this.logger.error(`Failed to get events by type: ${(error as Error).message}`);
+      return {} as Record<EventType, number>;
+    }
+  }
+
+  /**
+   * Get events by priority
+   */
+  async getEventsByPriority(): Promise<Record<EventPriority, number>> {
+    try {
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const counts: Record<EventPriority, number> = {} as Record<EventPriority, number>;
+      
+      Object.values(EventPriority).forEach(priority => {
+        counts[priority] = events.filter(event => event.priority === priority).length;
+      });
+
+      return counts;
+    } catch (error) {
+      this.logger.error(`Failed to get events by priority: ${(error as Error).message}`);
+      return {} as Record<EventPriority, number>;
+    }
+  }
+
+  /**
+   * Get events by source
+   */
+  async getEventsBySource(): Promise<Record<string, number>> {
+    try {
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const counts: Record<string, number> = {};
+      
+      events.forEach(event => {
+        counts[event.source] = (counts[event.source] || 0) + 1;
+      });
+
+      return counts;
+    } catch (error) {
+      this.logger.error(`Failed to get events by source: ${(error as Error).message}`);
+      return {};
+    }
+  }
+
+  /**
+   * Clear event history
+   */
+  async clearEventHistory(olderThan?: Date): Promise<void> {
+    try {
+      if (olderThan) {
+        const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+        const filteredEvents = events.filter(event => 
+          new Date(event.timestamp) >= olderThan
+        );
+        await this.cacheService.set(this.EVENTS_KEY, filteredEvents, 86400000);
+      } else {
+        await this.cacheService.set(this.EVENTS_KEY, [], 86400000);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to clear event history: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Get event bus health status
+   */
+  async getHealthStatus(): Promise<{
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    queueSize: number;
+    processingErrors: number;
+    lastEventProcessed: Date | null;
+    subscribers: number;
+  }> {
+    try {
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const recentErrors = events.filter(event => 
+        event.type === EventType.SYSTEM_ERROR &&
+        new Date(event.timestamp) > new Date(Date.now() - 60 * 60 * 1000) // last hour
+      ).length;
+
+      const lastProcessedEvent = events
+        .filter(event => event.processed)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+
+      const subscriberCount = Array.from(this.eventHandlers.values())
+        .reduce((total, handlers) => total + handlers.length, 0);
+
+      let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+      if (recentErrors > 10) {
+        status = 'unhealthy';
+      } else if (recentErrors > 5) {
+        status = 'degraded';
+      }
+
+      return {
+        status,
+        queueSize: events.filter(event => !event.processed).length,
+        processingErrors: recentErrors,
+        lastEventProcessed: lastProcessedEvent ? new Date(lastProcessedEvent.timestamp) : null,
+        subscribers: subscriberCount,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get health status: ${(error as Error).message}`);
+      return {
+        status: 'unhealthy',
+        queueSize: 0,
+        processingErrors: 0,
+        lastEventProcessed: null,
+        subscribers: 0,
+      };
+    }
+  }
+
+  /**
+   * Subscribe alias method for backwards compatibility
+   */
+  subscribe(eventType: EventType | string, handler: Function): void {
+    this.subscribeToEvent(eventType, handler);
   }
 
   /**
@@ -330,15 +517,15 @@ export class EventBusService implements OnModuleInit, OnModuleDestroy {
    */
   private async markEventAsProcessed(eventId: string): Promise<void> {
     try {
-      const events = await this.cacheManager.get<SystemEvent[]>(this.EVENTS_KEY) || [];
+      const events = await this.cacheService.get<SystemEvent[]>(this.EVENTS_KEY) || [];
       const eventIndex = events.findIndex(e => e.id === eventId);
       
       if (eventIndex > -1) {
         events[eventIndex].processed = true;
-        await this.cacheManager.set(this.EVENTS_KEY, events, 86400000);
+        await this.cacheService.set(this.EVENTS_KEY, events, 86400000);
       }
     } catch (error) {
-      this.logger.error(`Failed to mark event as processed: ${error.message}`);
+      this.logger.error(`Failed to mark event as processed: ${(error as Error).message}`);
     }
   }
 }

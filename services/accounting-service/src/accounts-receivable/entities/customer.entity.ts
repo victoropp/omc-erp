@@ -265,7 +265,7 @@ export class Customer {
   @Column({ name: 'days_sales_outstanding', default: 0 })
   daysSalesOutstanding: number;
 
-  @Column({ name: 'payment_history_score', type: 'decimal', precision: 5, 2, default: 0 })
+  @Column({ name: 'payment_history_score', type: 'decimal', precision: 5, scale: 2, default: 0 })
   paymentHistoryScore: number; // 0-100
 
   @Column({ name: 'risk_category', length: 20, default: 'MEDIUM' })

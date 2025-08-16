@@ -25,7 +25,7 @@ export class ServiceRegistryController {
       return await this.serviceRegistryService.registerService(registerDto);
     } catch (error) {
       throw new HttpException(
-        `Failed to register service: ${error.message}`,
+        `Failed to register service: ${(error as Error).message}`,
         HttpStatus.BAD_REQUEST
       );
     }

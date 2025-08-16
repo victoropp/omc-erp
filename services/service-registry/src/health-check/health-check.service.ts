@@ -1,7 +1,6 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
+import { CacheService } from '../common/cache.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import axios from 'axios';
 import * as si from 'systeminformation';
@@ -9,6 +8,7 @@ import { ServiceRegistryService } from '../service-registry/service-registry.ser
 import { EventBusService } from '../event-bus/event-bus.service';
 import { EventType, EventPriority } from '../event-bus/dto/event.dto';
 import { ServiceInstance, ServiceHealth } from '../service-registry/entities/service.entity';
+import { ServiceStatus } from '../service-registry/dto/register-service.dto';
 
 export interface SystemHealthMetrics {
   timestamp: Date;
@@ -66,11 +66,10 @@ export interface HealthCheckResult {
 export class HealthCheckService {
   private readonly logger = new Logger(HealthCheckService.name);
   private readonly HEALTH_METRICS_KEY = 'health:system_metrics';
-  private previousMetrics: SystemHealthMetrics | null = null;
 
   constructor(
     private readonly configService: ConfigService,
-    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly cacheService: CacheService,
     private readonly serviceRegistryService: ServiceRegistryService,
     private readonly eventBusService: EventBusService,
   ) {}
@@ -138,8 +137,8 @@ export class HealthCheckService {
       const metrics: SystemHealthMetrics = {
         timestamp: new Date(),
         cpu: {
-          usage: Math.round(cpuData.currentload),
-          temperature: cpuData.cpus?.[0]?.temperature,
+          usage: Math.round(cpuData.currentLoad),
+          temperature: (cpuData.cpus?.[0] as any)?.temperature,
         },
         memory: {
           used: memData.used,
@@ -163,19 +162,17 @@ export class HealthCheckService {
       };
 
       // Store metrics
-      await this.cacheManager.set(this.HEALTH_METRICS_KEY, metrics, 300000); // 5 minutes
+      await this.cacheService.set(this.HEALTH_METRICS_KEY, metrics, 300000); // 5 minutes
 
       // Check for alerts
       await this.checkSystemAlerts(metrics);
-
-      this.previousMetrics = metrics;
       
       const duration = Date.now() - startTime;
       this.logger.debug(`System metrics collected in ${duration}ms`);
 
       return metrics;
     } catch (error) {
-      this.logger.error(`Failed to collect system metrics: ${error.message}`);
+      this.logger.error(`Failed to collect system metrics: ${(error as Error).message}`);
       throw error;
     }
   }
@@ -184,7 +181,7 @@ export class HealthCheckService {
    * Get current system health metrics
    */
   async getSystemMetrics(): Promise<SystemHealthMetrics | null> {
-    return await this.cacheManager.get<SystemHealthMetrics>(this.HEALTH_METRICS_KEY);
+    return await this.cacheService.get<SystemHealthMetrics>(this.HEALTH_METRICS_KEY);
   }
 
   /**
@@ -208,7 +205,7 @@ export class HealthCheckService {
       
       const health: ServiceHealth = {
         serviceId: service.id,
-        status: response.status === 200 ? 'healthy' : 'unhealthy',
+        status: response.status === 200 ? ServiceStatus.HEALTHY : ServiceStatus.UNHEALTHY,
         timestamp: new Date(),
         responseTime,
         details: response.data || {},
@@ -249,20 +246,22 @@ export class HealthCheckService {
       
       const health: ServiceHealth = {
         serviceId: service.id,
-        status: 'unhealthy',
+        status: ServiceStatus.UNHEALTHY,
         timestamp: new Date(),
         responseTime,
-        error: error.message,
+        error: (error as Error).message,
         details: {
-          errorType: error.code || 'UNKNOWN',
-          timeout: error.code === 'ECONNABORTED',
+          customMetrics: {
+            errorType: (error as any).code || 'UNKNOWN',
+            timeout: (error as any).code === 'ECONNABORTED',
+          }
         },
       };
 
       // Update service health in registry
       await this.serviceRegistryService.updateServiceHealth(service.id, health);
 
-      const statusChanged = previousStatus !== 'unhealthy';
+      const statusChanged = previousStatus !== ServiceStatus.UNHEALTHY;
 
       // Emit event if status changed
       if (statusChanged) {
@@ -272,9 +271,9 @@ export class HealthCheckService {
             serviceId: service.id,
             serviceName: service.name,
             oldStatus: previousStatus,
-            newStatus: 'unhealthy',
+            newStatus: ServiceStatus.UNHEALTHY,
             responseTime,
-            error: error.message,
+            error: (error as Error).message,
           },
           source: 'health-check-service',
           priority: EventPriority.HIGH,
@@ -282,7 +281,7 @@ export class HealthCheckService {
         });
       }
 
-      this.logger.warn(`Health check failed for ${service.name}: ${error.message}`);
+      this.logger.warn(`Health check failed for ${service.name}: ${(error as Error).message}`);
 
       return {
         service,
@@ -329,7 +328,7 @@ export class HealthCheckService {
       return {
         status: 'unhealthy',
         responseTime: Date.now() - startTime,
-        error: error.message,
+        error: (error as Error).message,
       };
     }
   }
@@ -342,8 +341,8 @@ export class HealthCheckService {
     
     try {
       // Check Redis via cache manager
-      await this.cacheManager.set('health_check', 'ping', 1000);
-      const result = await this.cacheManager.get('health_check');
+      await this.cacheService.set('health_check', 'ping', 1000);
+      const result = await this.cacheService.get('health_check');
       
       if (result === 'ping') {
         return {
@@ -361,7 +360,7 @@ export class HealthCheckService {
       return {
         status: 'unhealthy',
         responseTime: Date.now() - startTime,
-        error: error.message,
+        error: (error as Error).message,
       };
     }
   }
@@ -388,7 +387,7 @@ export class HealthCheckService {
       return {
         status: 'unhealthy',
         responseTime: Date.now() - startTime,
-        error: error.message,
+        error: (error as Error).message,
       };
     }
   }
@@ -439,7 +438,7 @@ export class HealthCheckService {
       return {
         status: 'unhealthy',
         responseTime: Date.now() - startTime,
-        error: error.message,
+        error: (error as Error).message,
       };
     }
   }

@@ -315,7 +315,7 @@ export class VersioningService {
     return dateFields.some(field => fieldName.toLowerCase().includes(field));
   }
 
-  private convertDateFormat(dateString: string, fromFormat: string, toFormat: string): string {
+  private convertDateFormat(dateString: string, _fromFormat: string, toFormat: string): string {
     // Simplified date conversion - in reality, use a proper date library
     try {
       const date = new Date(dateString);

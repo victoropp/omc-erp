@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, ILike } from 'typeorm';
+import { Repository } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Station, User } from '@omc-erp/database';
+import { Station } from '../../../../packages/database/src/entities/Station';
+import { User } from '../../../../packages/database/src/entities/User';
 import { CreateStationDto } from './dto/create-station.dto';
 import { UpdateStationDto } from './dto/update-station.dto';
 import { QueryStationsDto } from './dto/query-stations.dto';
-import { StationStatus } from '@omc-erp/shared-types';
+import { StationStatus } from '../../../../packages/shared-types/src/enums';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()

@@ -1,0 +1,1 @@
+{"version":3,"file":"update-daily-delivery.dto.d.ts","sourceRoot":"","sources":["update-daily-delivery.dto.ts"],"names":[],"mappings":"AAEA,OAAO,EAAE,sBAAsB,EAAE,MAAM,6BAA6B,CAAC;;AAErE,qBAAa,sBAAuB,SAAQ,2BAAmC;IAI7E,SAAS,CAAC,EAAE,MAAM,CAAC;IAKnB,kBAAkB,CAAC,EAAE,MAAM,CAAC;IAK5B,gBAAgB,CAAC,EAAE,MAAM,CAAC;IAI1B,cAAc,CAAC,EAAE,MAAM,CAAC;IAIxB,8BAA8B,CAAC,EAAE,OAAO,CAAC;CAC1C"}

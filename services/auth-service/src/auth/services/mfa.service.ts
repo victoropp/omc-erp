@@ -1,7 +1,6 @@
-import { Injectable, BadRequestException, UnauthorizedException, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, BadRequestException, Logger, Inject } from '@nestjs/common';
 import { Cache } from 'cache-manager';
-import { Inject, CACHE_MANAGER } from '@nestjs/cache-manager';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
@@ -27,8 +26,289 @@ export class MfaService {
   private readonly backupCodesCount = 10;
 
   constructor(
-    private configService: ConfigService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
-  async generateMfaSetup(userId: string, userEmail: string): Promise<MfaSetupResponse> {\n    // Generate secret\n    const secret = speakeasy.generateSecret({\n      name: `OMC ERP (${userEmail})`,\n      issuer: 'OMC ERP System',\n      length: 32,\n    });\n\n    // Generate QR code\n    const qrCodeDataUrl = await QRCode.toDataURL(secret.otpauth_url!);\n\n    // Generate backup codes\n    const backupCodes = this.generateBackupCodes();\n\n    // Store setup data temporarily (10 minutes)\n    await this.cacheManager.set(\n      `mfa_setup:${userId}`,\n      {\n        secret: secret.base32,\n        backupCodes,\n        userEmail,\n        timestamp: Date.now(),\n      },\n      10 * 60 * 1000 // 10 minutes\n    );\n\n    this.logger.log(`MFA setup initiated for user ${userId}`);\n\n    return {\n      secret: secret.base32,\n      qrCodeUrl: secret.otpauth_url!,\n      qrCodeDataUrl,\n      backupCodes,\n    };\n  }\n\n  async verifyMfaSetup(userId: string, token: string): Promise<{ secret: string; backupCodes: string[] }> {\n    const setupData = await this.cacheManager.get(`mfa_setup:${userId}`) as any;\n    \n    if (!setupData) {\n      throw new BadRequestException('MFA setup session expired or not found');\n    }\n\n    // Verify the TOTP token\n    const isValid = speakeasy.totp.verify({\n      secret: setupData.secret,\n      encoding: 'base32',\n      token,\n      window: 2, // Allow 2 time steps tolerance\n    });\n\n    if (!isValid) {\n      throw new BadRequestException('Invalid TOTP token');\n    }\n\n    // Clear the setup cache\n    await this.cacheManager.del(`mfa_setup:${userId}`);\n\n    this.logger.log(`MFA setup completed for user ${userId}`);\n\n    return {\n      secret: setupData.secret,\n      backupCodes: setupData.backupCodes,\n    };\n  }\n\n  async verifyMfaToken(\n    secret: string,\n    token: string,\n    backupCodes?: string[]\n  ): Promise<MfaVerificationResult> {\n    // First try TOTP verification\n    const isValidTotp = speakeasy.totp.verify({\n      secret,\n      encoding: 'base32',\n      token,\n      window: 2,\n    });\n\n    if (isValidTotp) {\n      return {\n        isValid: true,\n        backupCodeUsed: false,\n      };\n    }\n\n    // If TOTP fails, try backup codes\n    if (backupCodes && backupCodes.length > 0) {\n      const normalizedToken = token.toUpperCase().replace(/\\s/g, '');\n      const codeIndex = backupCodes.indexOf(normalizedToken);\n      \n      if (codeIndex !== -1) {\n        return {\n          isValid: true,\n          backupCodeUsed: true,\n          remainingBackupCodes: backupCodes.length - 1,\n        };\n      }\n    }\n\n    return { isValid: false };\n  }\n\n  async generateNewBackupCodes(): Promise<string[]> {\n    return this.generateBackupCodes();\n  }\n\n  async createMfaSession(userId: string, deviceInfo?: any): Promise<string> {\n    const sessionId = uuidv4();\n    const sessionData = {\n      userId,\n      deviceInfo,\n      createdAt: new Date(),\n      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes\n    };\n\n    await this.cacheManager.set(\n      `mfa_session:${sessionId}`,\n      sessionData,\n      5 * 60 * 1000 // 5 minutes\n    );\n\n    return sessionId;\n  }\n\n  async getMfaSession(sessionId: string): Promise<any> {\n    return this.cacheManager.get(`mfa_session:${sessionId}`);\n  }\n\n  async completeMfaSession(sessionId: string): Promise<void> {\n    await this.cacheManager.del(`mfa_session:${sessionId}`);\n  }\n\n  async createTrustedDevice(userId: string, deviceFingerprint: string): Promise<string> {\n    const deviceId = uuidv4();\n    const deviceData = {\n      userId,\n      fingerprint: deviceFingerprint,\n      createdAt: new Date(),\n      lastUsed: new Date(),\n      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days\n    };\n\n    await this.cacheManager.set(\n      `trusted_device:${deviceId}`,\n      deviceData,\n      30 * 24 * 60 * 60 * 1000 // 30 days\n    );\n\n    this.logger.log(`Trusted device created for user ${userId}`);\n    return deviceId;\n  }\n\n  async isTrustedDevice(deviceId: string, deviceFingerprint: string): Promise<boolean> {\n    const deviceData = await this.cacheManager.get(`trusted_device:${deviceId}`) as any;\n    \n    if (!deviceData) {\n      return false;\n    }\n\n    // Check if device fingerprint matches and hasn't expired\n    if (deviceData.fingerprint === deviceFingerprint && new Date() < new Date(deviceData.expiresAt)) {\n      // Update last used timestamp\n      deviceData.lastUsed = new Date();\n      await this.cacheManager.set(\n        `trusted_device:${deviceId}`,\n        deviceData,\n        30 * 24 * 60 * 60 * 1000\n      );\n      \n      return true;\n    }\n\n    return false;\n  }\n\n  async revokeTrustedDevice(userId: string, deviceId: string): Promise<void> {\n    const deviceData = await this.cacheManager.get(`trusted_device:${deviceId}`) as any;\n    \n    if (deviceData && deviceData.userId === userId) {\n      await this.cacheManager.del(`trusted_device:${deviceId}`);\n      this.logger.log(`Trusted device ${deviceId} revoked for user ${userId}`);\n    }\n  }\n\n  async getUserTrustedDevices(userId: string): Promise<any[]> {\n    // This is a simplified implementation\n    // In production, you'd need a more efficient way to query trusted devices by userId\n    const devices: any[] = [];\n    \n    // This would require a more sophisticated caching strategy or database storage\n    // For now, return empty array\n    return devices;\n  }\n\n  generateDeviceFingerprint(request: any): string {\n    const userAgent = request.headers['user-agent'] || '';\n    const acceptLanguage = request.headers['accept-language'] || '';\n    const acceptEncoding = request.headers['accept-encoding'] || '';\n    \n    const fingerprint = crypto\n      .createHash('sha256')\n      .update(userAgent + acceptLanguage + acceptEncoding)\n      .digest('hex');\n    \n    return fingerprint;\n  }\n\n  private generateBackupCodes(): string[] {\n    const codes: string[] = [];\n    \n    for (let i = 0; i < this.backupCodesCount; i++) {\n      // Generate 8-character codes with letters and numbers\n      let code = '';\n      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';\n      \n      for (let j = 0; j < this.backupCodeLength; j++) {\n        code += chars.charAt(Math.floor(Math.random() * chars.length));\n      }\n      \n      codes.push(code);\n    }\n    \n    return codes;\n  }\n\n  async sendMfaNotification(userId: string, method: 'sms' | 'email', code?: string): Promise<void> {\n    // This would integrate with SMS/Email services\n    // For now, just log the notification\n    \n    if (method === 'sms') {\n      this.logger.log(`SMS MFA code would be sent to user ${userId}: ${code}`);\n    } else if (method === 'email') {\n      this.logger.log(`Email MFA code would be sent to user ${userId}: ${code}`);\n    }\n  }\n\n  generateSmsCode(): string {\n    return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code\n  }\n\n  async storeSmsCode(userId: string, code: string, phoneNumber: string): Promise<void> {\n    await this.cacheManager.set(\n      `sms_code:${userId}`,\n      {\n        code,\n        phoneNumber,\n        createdAt: new Date(),\n      },\n      5 * 60 * 1000 // 5 minutes\n    );\n  }\n\n  async verifySmsCode(userId: string, code: string): Promise<boolean> {\n    const storedData = await this.cacheManager.get(`sms_code:${userId}`) as any;\n    \n    if (!storedData) {\n      return false;\n    }\n\n    const isValid = storedData.code === code;\n    \n    if (isValid) {\n      // Remove the code after successful verification\n      await this.cacheManager.del(`sms_code:${userId}`);\n    }\n    \n    return isValid;\n  }\n\n  async getMfaRecoveryCodes(userId: string): Promise<string[]> {\n    // This would typically fetch from database\n    // For now, return empty array\n    return [];\n  }\n\n  async invalidateAllMfaSessions(userId: string): Promise<void> {\n    // This would remove all MFA-related cache entries for the user\n    // Implementation would depend on your caching strategy\n    \n    this.logger.log(`All MFA sessions invalidated for user ${userId}`);\n  }\n}
+  async generateMfaSetup(userId: string, userEmail: string): Promise<MfaSetupResponse> {
+    // Generate secret
+    const secret = speakeasy.generateSecret({
+      name: `OMC ERP (${userEmail})`,
+      issuer: 'OMC ERP System',
+      length: 32,
+    });
+
+    // Generate QR code
+    const qrCodeDataUrl = await QRCode.toDataURL(secret.otpauth_url!);
+
+    // Generate backup codes
+    const backupCodes = this.generateBackupCodes();
+
+    // Store setup data temporarily (10 minutes)
+    await this.cacheManager.set(
+      `mfa_setup:${userId}`,
+      {
+        secret: secret.base32,
+        backupCodes,
+        userEmail,
+        timestamp: Date.now(),
+      },
+      10 * 60 * 1000 // 10 minutes
+    );
+
+    this.logger.log(`MFA setup initiated for user ${userId}`);
+
+    return {
+      secret: secret.base32,
+      qrCodeUrl: secret.otpauth_url!,
+      qrCodeDataUrl,
+      backupCodes,
+    };
+  }
+
+  async verifyMfaSetup(userId: string, token: string): Promise<{ secret: string; backupCodes: string[] }> {
+    const setupData = await this.cacheManager.get(`mfa_setup:${userId}`) as any;
+    
+    if (!setupData) {
+      throw new BadRequestException('MFA setup session expired or not found');
+    }
+
+    // Verify the TOTP token
+    const isValid = speakeasy.totp.verify({
+      secret: setupData.secret,
+      encoding: 'base32',
+      token,
+      window: 2, // Allow 2 time steps tolerance
+    });
+
+    if (!isValid) {
+      throw new BadRequestException('Invalid TOTP token');
+    }
+
+    // Clear the setup cache
+    await this.cacheManager.del(`mfa_setup:${userId}`);
+
+    this.logger.log(`MFA setup completed for user ${userId}`);
+
+    return {
+      secret: setupData.secret,
+      backupCodes: setupData.backupCodes,
+    };
+  }
+
+  async verifyMfaToken(
+    secret: string,
+    token: string,
+    backupCodes?: string[]
+  ): Promise<MfaVerificationResult> {
+    // First try TOTP verification
+    const isValidTotp = speakeasy.totp.verify({
+      secret,
+      encoding: 'base32',
+      token,
+      window: 2,
+    });
+
+    if (isValidTotp) {
+      return {
+        isValid: true,
+        backupCodeUsed: false,
+      };
+    }
+
+    // If TOTP fails, try backup codes
+    if (backupCodes && backupCodes.length > 0) {
+      const normalizedToken = token.toUpperCase().replace(/\s/g, '');
+      const codeIndex = backupCodes.indexOf(normalizedToken);
+      
+      if (codeIndex !== -1) {
+        return {
+          isValid: true,
+          backupCodeUsed: true,
+          remainingBackupCodes: backupCodes.length - 1,
+        };
+      }
+    }
+
+    return { isValid: false };
+  }
+
+  async generateNewBackupCodes(): Promise<string[]> {
+    return this.generateBackupCodes();
+  }
+
+  async createMfaSession(userId: string, deviceInfo?: any): Promise<string> {
+    const sessionId = uuidv4();
+    const sessionData = {
+      userId,
+      deviceInfo,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+    };
+
+    await this.cacheManager.set(
+      `mfa_session:${sessionId}`,
+      sessionData,
+      5 * 60 * 1000 // 5 minutes
+    );
+
+    return sessionId;
+  }
+
+  async getMfaSession(sessionId: string): Promise<any> {
+    return this.cacheManager.get(`mfa_session:${sessionId}`);
+  }
+
+  async completeMfaSession(sessionId: string): Promise<void> {
+    await this.cacheManager.del(`mfa_session:${sessionId}`);
+  }
+
+  async createTrustedDevice(userId: string, deviceFingerprint: string): Promise<string> {
+    const deviceId = uuidv4();
+    const deviceData = {
+      userId,
+      fingerprint: deviceFingerprint,
+      createdAt: new Date(),
+      lastUsed: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+    };
+
+    await this.cacheManager.set(
+      `trusted_device:${deviceId}`,
+      deviceData,
+      30 * 24 * 60 * 60 * 1000 // 30 days
+    );
+
+    this.logger.log(`Trusted device created for user ${userId}`);
+    return deviceId;
+  }
+
+  async isTrustedDevice(deviceId: string, deviceFingerprint: string): Promise<boolean> {
+    const deviceData = await this.cacheManager.get(`trusted_device:${deviceId}`) as any;
+    
+    if (!deviceData) {
+      return false;
+    }
+
+    // Check if device fingerprint matches and hasn't expired
+    if (deviceData.fingerprint === deviceFingerprint && new Date() < new Date(deviceData.expiresAt)) {
+      // Update last used timestamp
+      deviceData.lastUsed = new Date();
+      await this.cacheManager.set(
+        `trusted_device:${deviceId}`,
+        deviceData,
+        30 * 24 * 60 * 60 * 1000
+      );
+      
+      return true;
+    }
+
+    return false;
+  }
+
+  async revokeTrustedDevice(userId: string, deviceId: string): Promise<void> {
+    const deviceData = await this.cacheManager.get(`trusted_device:${deviceId}`) as any;
+    
+    if (deviceData && deviceData.userId === userId) {
+      await this.cacheManager.del(`trusted_device:${deviceId}`);
+      this.logger.log(`Trusted device ${deviceId} revoked for user ${userId}`);
+    }
+  }
+
+  async getUserTrustedDevices(_userId: string): Promise<any[]> {
+    // This is a simplified implementation
+    // In production, you'd need a more efficient way to query trusted devices by userId
+    const devices: any[] = [];
+    
+    // This would require a more sophisticated caching strategy or database storage
+    // For now, return empty array
+    return devices;
+  }
+
+  generateDeviceFingerprint(request: any): string {
+    const userAgent = request.headers['user-agent'] || '';
+    const acceptLanguage = request.headers['accept-language'] || '';
+    const acceptEncoding = request.headers['accept-encoding'] || '';
+    
+    const fingerprint = crypto
+      .createHash('sha256')
+      .update(userAgent + acceptLanguage + acceptEncoding)
+      .digest('hex');
+    
+    return fingerprint;
+  }
+
+  private generateBackupCodes(): string[] {
+    const codes: string[] = [];
+    
+    for (let i = 0; i < this.backupCodesCount; i++) {
+      // Generate 8-character codes with letters and numbers
+      let code = '';
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      
+      for (let j = 0; j < this.backupCodeLength; j++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      
+      codes.push(code);
+    }
+    
+    return codes;
+  }
+
+  async sendMfaNotification(userId: string, method: 'sms' | 'email', code?: string): Promise<void> {
+    // This would integrate with SMS/Email services
+    // For now, just log the notification
+    
+    if (method === 'sms') {
+      this.logger.log(`SMS MFA code would be sent to user ${userId}: ${code}`);
+    } else if (method === 'email') {
+      this.logger.log(`Email MFA code would be sent to user ${userId}: ${code}`);
+    }
+  }
+
+  generateSmsCode(): string {
+    return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
+  }
+
+  async storeSmsCode(userId: string, code: string, phoneNumber: string): Promise<void> {
+    await this.cacheManager.set(
+      `sms_code:${userId}`,
+      {
+        code,
+        phoneNumber,
+        createdAt: new Date(),
+      },
+      5 * 60 * 1000 // 5 minutes
+    );
+  }
+
+  async verifySmsCode(userId: string, code: string): Promise<boolean> {
+    const storedData = await this.cacheManager.get(`sms_code:${userId}`) as any;
+    
+    if (!storedData) {
+      return false;
+    }
+
+    const isValid = storedData.code === code;
+    
+    if (isValid) {
+      // Remove the code after successful verification
+      await this.cacheManager.del(`sms_code:${userId}`);
+    }
+    
+    return isValid;
+  }
+
+  async getMfaRecoveryCodes(_userId: string): Promise<string[]> {
+    // This would typically fetch from database
+    // For now, return empty array
+    return [];
+  }
+
+  async invalidateAllMfaSessions(userId: string): Promise<void> {
+    // This would remove all MFA-related cache entries for the user
+    // Implementation would depend on your caching strategy
+    
+    this.logger.log(`All MFA sessions invalidated for user ${userId}`);
+  }
+}

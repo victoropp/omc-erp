@@ -9,9 +9,8 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
-import * as bcrypt from 'bcrypt';
-import { User } from '@omc-erp/database';
 import { UserStatus } from '@omc-erp/shared-types';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class AuthService {
@@ -135,7 +134,7 @@ export class AuthService {
     }
 
     // Generate reset token
-    const resetToken = await this.generatePasswordResetToken(user.id);
+    await this.generatePasswordResetToken(user.id);
     
     // TODO: Send email with reset token
     // await this.emailService.sendPasswordResetEmail(user.email, resetToken);
@@ -188,7 +187,7 @@ export class AuthService {
     return profile;
   }
 
-  async verifyEmail(token: string) {
+  async verifyEmail(_token: string) {
     // TODO: Implement email verification
     return { message: 'Email verified successfully' };
   }

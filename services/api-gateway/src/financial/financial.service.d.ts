@@ -1,0 +1,45 @@
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import { Cache } from 'cache-manager';
+export declare class FinancialService {
+    private httpService;
+    private configService;
+    private cacheManager;
+    private readonly logger;
+    private readonly financialServiceUrl;
+    constructor(httpService: HttpService, configService: ConfigService, cacheManager: Cache);
+    forwardRequest(path: string, method: string, data?: any, headers?: any): Promise<any>;
+    getChartOfAccounts(filters?: any): Promise<any>;
+    createAccount(accountData: any): Promise<any>;
+    updateAccount(accountId: string, accountData: any): Promise<any>;
+    deleteAccount(accountId: string): Promise<any>;
+    getTrialBalance(periodId?: string, asOfDate?: string): Promise<any>;
+    getFinancialStatements(periodId: string, statementType: string): Promise<any>;
+    getAccountBalance(accountCode: string, asOfDate?: string): Promise<any>;
+    getAccountMovements(accountCode: string, fromDate?: string, toDate?: string): Promise<any>;
+    createJournalEntry(journalData: any): Promise<any>;
+    postJournalEntry(journalId: string): Promise<any>;
+    reverseJournalEntry(journalId: string, reason: string): Promise<any>;
+    getJournalEntries(filters?: any): Promise<any>;
+    getJournalEntry(journalId: string): Promise<any>;
+    updateJournalEntry(journalId: string, journalData: any): Promise<any>;
+    deleteJournalEntry(journalId: string): Promise<any>;
+    calculateTaxes(taxCalculationData: any): Promise<any>;
+    getGhanaTaxRates(taxType?: string): Promise<any>;
+    submitTaxReturn(taxReturnData: any): Promise<any>;
+    getFixedAssets(filters?: any): Promise<any>;
+    createFixedAsset(assetData: any): Promise<any>;
+    calculateDepreciation(assetId: string, method: string, params: any): Promise<any>;
+    runDepreciationSchedule(periodId: string): Promise<any>;
+    getBudgets(fiscalYear?: number, departmentId?: string): Promise<any>;
+    createBudget(budgetData: any): Promise<any>;
+    getBudgetVarianceAnalysis(budgetId: string, periodId?: string): Promise<any>;
+    getProjectProfitability(projectId: string, fromDate?: string, toDate?: string): Promise<any>;
+    getCostAllocation(costCenterId: string, periodId?: string): Promise<any>;
+    getIfrsCompliance(periodId: string): Promise<any>;
+    generateIfrsReport(reportType: string, periodId: string): Promise<any>;
+    private clearAccountCaches;
+    private clearFinancialCaches;
+    getHealthCheck(): Promise<any>;
+}
+//# sourceMappingURL=financial.service.d.ts.map

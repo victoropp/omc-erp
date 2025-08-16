@@ -4,9 +4,9 @@
   "description": "Ghana OMC ERP Dashboard - React Frontend",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3003",
+    "dev": "next dev -p 5000",
     "build": "next build",
-    "start": "next start -p 3003",
+    "start": "next start -p 5000",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
     "test": "jest",

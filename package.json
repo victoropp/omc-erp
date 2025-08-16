@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Ghana Oil Marketing Company SaaS ERP System",
   "private": true,
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
@@ -12,8 +16,10 @@
     "clean": "turbo run clean",
     "db:migrate": "npm run db:migrate --workspace=@omc-erp/database",
     "db:seed": "npm run db:seed --workspace=@omc-erp/database",
+    "db:health": "ts-node scripts/check-database-health.ts",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
+    "docker:db-only": "docker-compose up -d postgres timescaledb redis mongodb",
     "prepare": "husky install"
   },
   "devDependencies": {
@@ -42,11 +48,16 @@
     ]
   },
   "dependencies": {
+    "axios": "^1.11.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "express-rate-limit": "^8.0.1",
     "http-proxy-middleware": "^3.0.5",
-    "pg": "^8.16.3"
+    "ioredis": "^5.3.2",
+    "mongodb": "^6.3.0",
+    "pg": "^8.16.3",
+    "redis": "^4.6.5",
+    "ts-node": "^10.9.2"
   }
 }

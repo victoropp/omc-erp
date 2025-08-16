@@ -39,7 +39,7 @@ export class AuthController {
   @ApiOperation({ summary: 'User login' })
   @ApiResponse({ status: 200, description: 'Successfully logged in' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async login(@Request() req, @Body() loginDto: LoginDto) {
+  async login(@Request() req, @Body() _loginDto: LoginDto) {
     return this.authService.login(req.user);
   }
 
@@ -49,7 +49,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiResponse({ status: 200, description: 'Token refreshed successfully' })
   @ApiResponse({ status: 401, description: 'Invalid refresh token' })
-  async refreshTokens(@Request() req, @Body() refreshTokenDto: RefreshTokenDto) {
+  async refreshTokens(@Request() req, @Body() _refreshTokenDto: RefreshTokenDto) {
     const userId = req.user['sub'];
     const refreshToken = req.user['refreshToken'];
     return this.authService.refreshTokens(userId, refreshToken);

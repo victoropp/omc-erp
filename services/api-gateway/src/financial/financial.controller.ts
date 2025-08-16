@@ -1,1 +1,471 @@
-import {\n  Controller,\n  Get,\n  Post,\n  Put,\n  Delete,\n  Body,\n  Param,\n  Query,\n  UseGuards,\n  Req,\n} from '@nestjs/common';\nimport { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';\nimport { FinancialService } from './financial.service';\nimport { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';\nimport { PermissionsGuard } from '../auth/guards/permissions.guard';\nimport { Permissions } from '../auth/decorators/permissions.decorator';\nimport { ThrottlerGuard } from '@nestjs/throttler';\n\n@ApiTags('Financial Management')\n@Controller('financial')\n@UseGuards(ThrottlerGuard, JwtAuthGuard, PermissionsGuard)\n@ApiBearerAuth()\nexport class FinancialController {\n  constructor(private readonly financialService: FinancialService) {}\n\n  // ===== CHART OF ACCOUNTS =====\n  @Get('chart-of-accounts')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Chart of Accounts' })\n  @ApiResponse({ status: 200, description: 'Chart of Accounts retrieved' })\n  @ApiQuery({ name: 'accountType', required: false, description: 'Filter by account type' })\n  @ApiQuery({ name: 'isActive', required: false, description: 'Filter by active status' })\n  async getChartOfAccounts(\n    @Query('accountType') accountType?: string,\n    @Query('isActive') isActive?: boolean,\n  ) {\n    const filters = { accountType, isActive };\n    const result = await this.financialService.getChartOfAccounts(filters);\n    \n    return {\n      success: true,\n      data: result,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post('chart-of-accounts')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Create new account' })\n  @ApiResponse({ status: 201, description: 'Account created successfully' })\n  async createAccount(@Body() accountData: any, @Req() req: any) {\n    const enrichedData = {\n      ...accountData,\n      createdBy: req.user.sub,\n      createdAt: new Date().toISOString(),\n    };\n    \n    const result = await this.financialService.createAccount(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Account created successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Put('chart-of-accounts/:id')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Update account' })\n  @ApiParam({ name: 'id', description: 'Account ID' })\n  @ApiResponse({ status: 200, description: 'Account updated successfully' })\n  async updateAccount(\n    @Param('id') accountId: string,\n    @Body() accountData: any,\n    @Req() req: any,\n  ) {\n    const enrichedData = {\n      ...accountData,\n      updatedBy: req.user.sub,\n      updatedAt: new Date().toISOString(),\n    };\n    \n    const result = await this.financialService.updateAccount(accountId, enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Account updated successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Delete('chart-of-accounts/:id')\n  @Permissions('finance:delete')\n  @ApiOperation({ summary: 'Delete account' })\n  @ApiParam({ name: 'id', description: 'Account ID' })\n  @ApiResponse({ status: 200, description: 'Account deleted successfully' })\n  async deleteAccount(@Param('id') accountId: string) {\n    await this.financialService.deleteAccount(accountId);\n    \n    return {\n      success: true,\n      message: 'Account deleted successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== GENERAL LEDGER =====\n  @Get('general-ledger/trial-balance')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Trial Balance' })\n  @ApiResponse({ status: 200, description: 'Trial Balance retrieved' })\n  @ApiQuery({ name: 'periodId', required: false, description: 'Accounting period ID' })\n  @ApiQuery({ name: 'asOfDate', required: false, description: 'As of date (YYYY-MM-DD)' })\n  async getTrialBalance(\n    @Query('periodId') periodId?: string,\n    @Query('asOfDate') asOfDate?: string,\n  ) {\n    const result = await this.financialService.getTrialBalance(periodId, asOfDate);\n    \n    return {\n      success: true,\n      data: result,\n      parameters: { periodId, asOfDate },\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get('general-ledger/account-balance/:accountCode')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Account Balance' })\n  @ApiParam({ name: 'accountCode', description: 'Account code' })\n  @ApiQuery({ name: 'asOfDate', required: false, description: 'As of date (YYYY-MM-DD)' })\n  @ApiResponse({ status: 200, description: 'Account balance retrieved' })\n  async getAccountBalance(\n    @Param('accountCode') accountCode: string,\n    @Query('asOfDate') asOfDate?: string,\n  ) {\n    const result = await this.financialService.getAccountBalance(accountCode, asOfDate);\n    \n    return {\n      success: true,\n      data: result,\n      accountCode,\n      asOfDate,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get('general-ledger/account-movements/:accountCode')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Account Movements (Ledger)' })\n  @ApiParam({ name: 'accountCode', description: 'Account code' })\n  @ApiQuery({ name: 'fromDate', required: false, description: 'From date (YYYY-MM-DD)' })\n  @ApiQuery({ name: 'toDate', required: false, description: 'To date (YYYY-MM-DD)' })\n  @ApiResponse({ status: 200, description: 'Account movements retrieved' })\n  async getAccountMovements(\n    @Param('accountCode') accountCode: string,\n    @Query('fromDate') fromDate?: string,\n    @Query('toDate') toDate?: string,\n  ) {\n    const result = await this.financialService.getAccountMovements(accountCode, fromDate, toDate);\n    \n    return {\n      success: true,\n      data: result,\n      parameters: { accountCode, fromDate, toDate },\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== JOURNAL ENTRIES =====\n  @Get('journal-entries')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Journal Entries' })\n  @ApiResponse({ status: 200, description: 'Journal entries retrieved' })\n  @ApiQuery({ name: 'periodId', required: false })\n  @ApiQuery({ name: 'status', required: false })\n  @ApiQuery({ name: 'fromDate', required: false })\n  @ApiQuery({ name: 'toDate', required: false })\n  @ApiQuery({ name: 'page', required: false })\n  @ApiQuery({ name: 'limit', required: false })\n  async getJournalEntries(\n    @Query('periodId') periodId?: string,\n    @Query('status') status?: string,\n    @Query('fromDate') fromDate?: string,\n    @Query('toDate') toDate?: string,\n    @Query('page') page?: number,\n    @Query('limit') limit?: number,\n  ) {\n    const filters = { periodId, status, fromDate, toDate, page, limit };\n    const result = await this.financialService.getJournalEntries(filters);\n    \n    return {\n      success: true,\n      data: result,\n      filters,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get('journal-entries/:id')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Journal Entry by ID' })\n  @ApiParam({ name: 'id', description: 'Journal Entry ID' })\n  @ApiResponse({ status: 200, description: 'Journal entry retrieved' })\n  async getJournalEntry(@Param('id') journalId: string) {\n    const result = await this.financialService.getJournalEntry(journalId);\n    \n    return {\n      success: true,\n      data: result,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post('journal-entries')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Create Journal Entry' })\n  @ApiResponse({ status: 201, description: 'Journal entry created successfully' })\n  async createJournalEntry(@Body() journalData: any, @Req() req: any) {\n    const enrichedData = {\n      ...journalData,\n      createdBy: req.user.sub,\n      createdAt: new Date().toISOString(),\n      status: 'DRAFT',\n    };\n    \n    const result = await this.financialService.createJournalEntry(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Journal entry created successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Put('journal-entries/:id')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Update Journal Entry (Draft only)' })\n  @ApiParam({ name: 'id', description: 'Journal Entry ID' })\n  @ApiResponse({ status: 200, description: 'Journal entry updated successfully' })\n  async updateJournalEntry(\n    @Param('id') journalId: string,\n    @Body() journalData: any,\n    @Req() req: any,\n  ) {\n    const enrichedData = {\n      ...journalData,\n      updatedBy: req.user.sub,\n      updatedAt: new Date().toISOString(),\n    };\n    \n    const result = await this.financialService.updateJournalEntry(journalId, enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Journal entry updated successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post('journal-entries/:id/post')\n  @Permissions('finance:approve')\n  @ApiOperation({ summary: 'Post Journal Entry to GL' })\n  @ApiParam({ name: 'id', description: 'Journal Entry ID' })\n  @ApiResponse({ status: 200, description: 'Journal entry posted successfully' })\n  async postJournalEntry(@Param('id') journalId: string, @Req() req: any) {\n    const result = await this.financialService.postJournalEntry(journalId);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Journal entry posted to General Ledger successfully',\n      postedBy: req.user.sub,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post('journal-entries/:id/reverse')\n  @Permissions('finance:approve')\n  @ApiOperation({ summary: 'Reverse Journal Entry' })\n  @ApiParam({ name: 'id', description: 'Journal Entry ID' })\n  @ApiResponse({ status: 200, description: 'Journal entry reversed successfully' })\n  async reverseJournalEntry(\n    @Param('id') journalId: string,\n    @Body() reverseData: { reason: string },\n    @Req() req: any,\n  ) {\n    const result = await this.financialService.reverseJournalEntry(journalId, reverseData.reason);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Journal entry reversed successfully',\n      reversedBy: req.user.sub,\n      reason: reverseData.reason,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Delete('journal-entries/:id')\n  @Permissions('finance:delete')\n  @ApiOperation({ summary: 'Delete Journal Entry (Draft only)' })\n  @ApiParam({ name: 'id', description: 'Journal Entry ID' })\n  @ApiResponse({ status: 200, description: 'Journal entry deleted successfully' })\n  async deleteJournalEntry(@Param('id') journalId: string) {\n    await this.financialService.deleteJournalEntry(journalId);\n    \n    return {\n      success: true,\n      message: 'Journal entry deleted successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== FINANCIAL REPORTING =====\n  @Get('reports/profit-loss')\n  @Permissions('reports:read')\n  @ApiOperation({ summary: 'Get Profit & Loss Statement' })\n  @ApiResponse({ status: 200, description: 'P&L statement retrieved' })\n  @ApiQuery({ name: 'periodId', required: true, description: 'Accounting period ID' })\n  @ApiQuery({ name: 'comparative', required: false, description: 'Include comparative period' })\n  async getProfitLossStatement(\n    @Query('periodId') periodId: string,\n    @Query('comparative') comparative?: boolean,\n  ) {\n    const result = await this.financialService.getFinancialStatements(periodId, 'profit-loss');\n    \n    return {\n      success: true,\n      data: result,\n      statementType: 'Profit & Loss Statement',\n      periodId,\n      comparative,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get('reports/balance-sheet')\n  @Permissions('reports:read')\n  @ApiOperation({ summary: 'Get Balance Sheet' })\n  @ApiResponse({ status: 200, description: 'Balance sheet retrieved' })\n  @ApiQuery({ name: 'periodId', required: true, description: 'Accounting period ID' })\n  async getBalanceSheet(@Query('periodId') periodId: string) {\n    const result = await this.financialService.getFinancialStatements(periodId, 'balance-sheet');\n    \n    return {\n      success: true,\n      data: result,\n      statementType: 'Balance Sheet',\n      periodId,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get('reports/cash-flow')\n  @Permissions('reports:read')\n  @ApiOperation({ summary: 'Get Cash Flow Statement' })\n  @ApiResponse({ status: 200, description: 'Cash flow statement retrieved' })\n  @ApiQuery({ name: 'periodId', required: true, description: 'Accounting period ID' })\n  async getCashFlowStatement(@Query('periodId') periodId: string) {\n    const result = await this.financialService.getFinancialStatements(periodId, 'cash-flow');\n    \n    return {\n      success: true,\n      data: result,\n      statementType: 'Cash Flow Statement',\n      periodId,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== TAX MANAGEMENT =====\n  @Get('tax/ghana-rates')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Ghana Tax Rates' })\n  @ApiResponse({ status: 200, description: 'Ghana tax rates retrieved' })\n  @ApiQuery({ name: 'taxType', required: false, description: 'VAT, NHIL, GETFund, etc.' })\n  async getGhanaTaxRates(@Query('taxType') taxType?: string) {\n    const result = await this.financialService.getGhanaTaxRates(taxType);\n    \n    return {\n      success: true,\n      data: result,\n      country: 'Ghana',\n      taxType,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post('tax/calculate')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Calculate Taxes' })\n  @ApiResponse({ status: 200, description: 'Tax calculation completed' })\n  async calculateTaxes(@Body() calculationData: any) {\n    const result = await this.financialService.calculateTaxes(calculationData);\n    \n    return {\n      success: true,\n      data: result,\n      calculationDate: new Date().toISOString(),\n    };\n  }\n\n  @Post('tax/returns')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Submit Tax Return' })\n  @ApiResponse({ status: 201, description: 'Tax return submitted successfully' })\n  async submitTaxReturn(@Body() taxReturnData: any, @Req() req: any) {\n    const enrichedData = {\n      ...taxReturnData,\n      submittedBy: req.user.sub,\n      submittedAt: new Date().toISOString(),\n    };\n    \n    const result = await this.financialService.submitTaxReturn(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Tax return submitted successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== SYSTEM HEALTH =====\n  @Get('health')\n  @ApiOperation({ summary: 'Financial service health check' })\n  @ApiResponse({ status: 200, description: 'Health status retrieved' })\n  async getHealthCheck() {\n    const result = await this.financialService.getHealthCheck();\n    return result;\n  }\n\n  // ===== FINANCIAL DASHBOARD =====\n  @Get('dashboard/summary')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Financial Dashboard Summary' })\n  @ApiResponse({ status: 200, description: 'Dashboard summary retrieved' })\n  @ApiQuery({ name: 'periodId', required: false })\n  async getDashboardSummary(@Query('periodId') periodId?: string) {\n    const [trialBalance, profitLoss, balanceSheet] = await Promise.all([\n      this.financialService.getTrialBalance(periodId),\n      this.financialService.getFinancialStatements(periodId || 'current', 'profit-loss'),\n      this.financialService.getFinancialStatements(periodId || 'current', 'balance-sheet'),\n    ]);\n\n    return {\n      success: true,\n      data: {\n        summary: {\n          totalAssets: balanceSheet?.totalAssets || 0,\n          totalLiabilities: balanceSheet?.totalLiabilities || 0,\n          totalEquity: balanceSheet?.totalEquity || 0,\n          totalRevenue: profitLoss?.totalRevenue || 0,\n          totalExpenses: profitLoss?.totalExpenses || 0,\n          netIncome: profitLoss?.netIncome || 0,\n        },\n        trialBalanceStatus: trialBalance?.isBalanced ? 'Balanced' : 'Out of Balance',\n        lastUpdated: new Date().toISOString(),\n      },\n      periodId,\n      timestamp: new Date().toISOString(),\n    };\n  }\n}"
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { FinancialService } from './financial.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../auth/decorators/permissions.decorator';
+import { ThrottlerGuard } from '@nestjs/throttler';
+
+@ApiTags('Financial Management')
+@Controller('financial')
+@UseGuards(ThrottlerGuard, JwtAuthGuard, PermissionsGuard)
+@ApiBearerAuth()
+export class FinancialController {
+  constructor(private readonly financialService: FinancialService) {}
+
+  // ===== CHART OF ACCOUNTS =====
+  @Get('chart-of-accounts')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Chart of Accounts' })
+  @ApiResponse({ status: 200, description: 'Chart of Accounts retrieved' })
+  @ApiQuery({ name: 'accountType', required: false, description: 'Filter by account type' })
+  @ApiQuery({ name: 'isActive', required: false, description: 'Filter by active status' })
+  async getChartOfAccounts(
+    @Query('accountType') accountType?: string,
+    @Query('isActive') isActive?: boolean,
+  ) {
+    const filters = { accountType, isActive };
+    const result = await this.financialService.getChartOfAccounts(filters);
+    
+    return {
+      success: true,
+      data: result,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post('chart-of-accounts')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Create new account' })
+  @ApiResponse({ status: 201, description: 'Account created successfully' })
+  async createAccount(@Body() accountData: any, @Req() req: any) {
+    const enrichedData = {
+      ...accountData,
+      createdBy: req.user.sub,
+      createdAt: new Date().toISOString(),
+    };
+    
+    const result = await this.financialService.createAccount(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Account created successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Put('chart-of-accounts/:id')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Update account' })
+  @ApiParam({ name: 'id', description: 'Account ID' })
+  @ApiResponse({ status: 200, description: 'Account updated successfully' })
+  async updateAccount(
+    @Param('id') accountId: string,
+    @Body() accountData: any,
+    @Req() req: any,
+  ) {
+    const enrichedData = {
+      ...accountData,
+      updatedBy: req.user.sub,
+      updatedAt: new Date().toISOString(),
+    };
+    
+    const result = await this.financialService.updateAccount(accountId, enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Account updated successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Delete('chart-of-accounts/:id')
+  @Permissions('finance:delete')
+  @ApiOperation({ summary: 'Delete account' })
+  @ApiParam({ name: 'id', description: 'Account ID' })
+  @ApiResponse({ status: 200, description: 'Account deleted successfully' })
+  async deleteAccount(@Param('id') accountId: string) {
+    await this.financialService.deleteAccount(accountId);
+    
+    return {
+      success: true,
+      message: 'Account deleted successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== GENERAL LEDGER =====
+  @Get('general-ledger/trial-balance')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Trial Balance' })
+  @ApiResponse({ status: 200, description: 'Trial Balance retrieved' })
+  @ApiQuery({ name: 'periodId', required: false, description: 'Accounting period ID' })
+  @ApiQuery({ name: 'asOfDate', required: false, description: 'As of date (YYYY-MM-DD)' })
+  async getTrialBalance(
+    @Query('periodId') periodId?: string,
+    @Query('asOfDate') asOfDate?: string,
+  ) {
+    const result = await this.financialService.getTrialBalance(periodId, asOfDate);
+    
+    return {
+      success: true,
+      data: result,
+      parameters: { periodId, asOfDate },
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('general-ledger/account-balance/:accountCode')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Account Balance' })
+  @ApiParam({ name: 'accountCode', description: 'Account code' })
+  @ApiQuery({ name: 'asOfDate', required: false, description: 'As of date (YYYY-MM-DD)' })
+  @ApiResponse({ status: 200, description: 'Account balance retrieved' })
+  async getAccountBalance(
+    @Param('accountCode') accountCode: string,
+    @Query('asOfDate') asOfDate?: string,
+  ) {
+    const result = await this.financialService.getAccountBalance(accountCode, asOfDate);
+    
+    return {
+      success: true,
+      data: result,
+      accountCode,
+      asOfDate,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('general-ledger/account-movements/:accountCode')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Account Movements (Ledger)' })
+  @ApiParam({ name: 'accountCode', description: 'Account code' })
+  @ApiQuery({ name: 'fromDate', required: false, description: 'From date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'toDate', required: false, description: 'To date (YYYY-MM-DD)' })
+  @ApiResponse({ status: 200, description: 'Account movements retrieved' })
+  async getAccountMovements(
+    @Param('accountCode') accountCode: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    const result = await this.financialService.getAccountMovements(accountCode, fromDate, toDate);
+    
+    return {
+      success: true,
+      data: result,
+      parameters: { accountCode, fromDate, toDate },
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== JOURNAL ENTRIES =====
+  @Get('journal-entries')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Journal Entries' })
+  @ApiResponse({ status: 200, description: 'Journal entries retrieved' })
+  @ApiQuery({ name: 'periodId', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  async getJournalEntries(
+    @Query('periodId') periodId?: string,
+    @Query('status') status?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    const filters = { periodId, status, fromDate, toDate, page, limit };
+    const result = await this.financialService.getJournalEntries(filters);
+    
+    return {
+      success: true,
+      data: result,
+      filters,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('journal-entries/:id')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Journal Entry by ID' })
+  @ApiParam({ name: 'id', description: 'Journal Entry ID' })
+  @ApiResponse({ status: 200, description: 'Journal entry retrieved' })
+  async getJournalEntry(@Param('id') journalId: string) {
+    const result = await this.financialService.getJournalEntry(journalId);
+    
+    return {
+      success: true,
+      data: result,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post('journal-entries')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Create Journal Entry' })
+  @ApiResponse({ status: 201, description: 'Journal entry created successfully' })
+  async createJournalEntry(@Body() journalData: any, @Req() req: any) {
+    const enrichedData = {
+      ...journalData,
+      createdBy: req.user.sub,
+      createdAt: new Date().toISOString(),
+      status: 'DRAFT',
+    };
+    
+    const result = await this.financialService.createJournalEntry(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Journal entry created successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Put('journal-entries/:id')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Update Journal Entry (Draft only)' })
+  @ApiParam({ name: 'id', description: 'Journal Entry ID' })
+  @ApiResponse({ status: 200, description: 'Journal entry updated successfully' })
+  async updateJournalEntry(
+    @Param('id') journalId: string,
+    @Body() journalData: any,
+    @Req() req: any,
+  ) {
+    const enrichedData = {
+      ...journalData,
+      updatedBy: req.user.sub,
+      updatedAt: new Date().toISOString(),
+    };
+    
+    const result = await this.financialService.updateJournalEntry(journalId, enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Journal entry updated successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post('journal-entries/:id/post')
+  @Permissions('finance:approve')
+  @ApiOperation({ summary: 'Post Journal Entry to GL' })
+  @ApiParam({ name: 'id', description: 'Journal Entry ID' })
+  @ApiResponse({ status: 200, description: 'Journal entry posted successfully' })
+  async postJournalEntry(@Param('id') journalId: string, @Req() req: any) {
+    const result = await this.financialService.postJournalEntry(journalId);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Journal entry posted to General Ledger successfully',
+      postedBy: req.user.sub,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post('journal-entries/:id/reverse')
+  @Permissions('finance:approve')
+  @ApiOperation({ summary: 'Reverse Journal Entry' })
+  @ApiParam({ name: 'id', description: 'Journal Entry ID' })
+  @ApiResponse({ status: 200, description: 'Journal entry reversed successfully' })
+  async reverseJournalEntry(
+    @Param('id') journalId: string,
+    @Body() reverseData: { reason: string },
+    @Req() req: any,
+  ) {
+    const result = await this.financialService.reverseJournalEntry(journalId, reverseData.reason);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Journal entry reversed successfully',
+      reversedBy: req.user.sub,
+      reason: reverseData.reason,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Delete('journal-entries/:id')
+  @Permissions('finance:delete')
+  @ApiOperation({ summary: 'Delete Journal Entry (Draft only)' })
+  @ApiParam({ name: 'id', description: 'Journal Entry ID' })
+  @ApiResponse({ status: 200, description: 'Journal entry deleted successfully' })
+  async deleteJournalEntry(@Param('id') journalId: string) {
+    await this.financialService.deleteJournalEntry(journalId);
+    
+    return {
+      success: true,
+      message: 'Journal entry deleted successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== FINANCIAL REPORTING =====
+  @Get('reports/profit-loss')
+  @Permissions('reports:read')
+  @ApiOperation({ summary: 'Get Profit & Loss Statement' })
+  @ApiResponse({ status: 200, description: 'P&L statement retrieved' })
+  @ApiQuery({ name: 'periodId', required: true, description: 'Accounting period ID' })
+  @ApiQuery({ name: 'comparative', required: false, description: 'Include comparative period' })
+  async getProfitLossStatement(
+    @Query('periodId') periodId: string,
+    @Query('comparative') comparative?: boolean,
+  ) {
+    const result = await this.financialService.getFinancialStatements(periodId, 'profit-loss');
+    
+    return {
+      success: true,
+      data: result,
+      statementType: 'Profit & Loss Statement',
+      periodId,
+      comparative,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('reports/balance-sheet')
+  @Permissions('reports:read')
+  @ApiOperation({ summary: 'Get Balance Sheet' })
+  @ApiResponse({ status: 200, description: 'Balance sheet retrieved' })
+  @ApiQuery({ name: 'periodId', required: true, description: 'Accounting period ID' })
+  async getBalanceSheet(@Query('periodId') periodId: string) {
+    const result = await this.financialService.getFinancialStatements(periodId, 'balance-sheet');
+    
+    return {
+      success: true,
+      data: result,
+      statementType: 'Balance Sheet',
+      periodId,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('reports/cash-flow')
+  @Permissions('reports:read')
+  @ApiOperation({ summary: 'Get Cash Flow Statement' })
+  @ApiResponse({ status: 200, description: 'Cash flow statement retrieved' })
+  @ApiQuery({ name: 'periodId', required: true, description: 'Accounting period ID' })
+  async getCashFlowStatement(@Query('periodId') periodId: string) {
+    const result = await this.financialService.getFinancialStatements(periodId, 'cash-flow');
+    
+    return {
+      success: true,
+      data: result,
+      statementType: 'Cash Flow Statement',
+      periodId,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== TAX MANAGEMENT =====
+  @Get('tax/ghana-rates')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Ghana Tax Rates' })
+  @ApiResponse({ status: 200, description: 'Ghana tax rates retrieved' })
+  @ApiQuery({ name: 'taxType', required: false, description: 'VAT, NHIL, GETFund, etc.' })
+  async getGhanaTaxRates(@Query('taxType') taxType?: string) {
+    const result = await this.financialService.getGhanaTaxRates(taxType);
+    
+    return {
+      success: true,
+      data: result,
+      country: 'Ghana',
+      taxType,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post('tax/calculate')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Calculate Taxes' })
+  @ApiResponse({ status: 200, description: 'Tax calculation completed' })
+  async calculateTaxes(@Body() calculationData: any) {
+    const result = await this.financialService.calculateTaxes(calculationData);
+    
+    return {
+      success: true,
+      data: result,
+      calculationDate: new Date().toISOString(),
+    };
+  }
+
+  @Post('tax/returns')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Submit Tax Return' })
+  @ApiResponse({ status: 201, description: 'Tax return submitted successfully' })
+  async submitTaxReturn(@Body() taxReturnData: any, @Req() req: any) {
+    const enrichedData = {
+      ...taxReturnData,
+      submittedBy: req.user.sub,
+      submittedAt: new Date().toISOString(),
+    };
+    
+    const result = await this.financialService.submitTaxReturn(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Tax return submitted successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== SYSTEM HEALTH =====
+  @Get('health')
+  @ApiOperation({ summary: 'Financial service health check' })
+  @ApiResponse({ status: 200, description: 'Health status retrieved' })
+  async getHealthCheck() {
+    const result = await this.financialService.getHealthCheck();
+    return result;
+  }
+
+  // ===== FINANCIAL DASHBOARD =====
+  @Get('dashboard/summary')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Financial Dashboard Summary' })
+  @ApiResponse({ status: 200, description: 'Dashboard summary retrieved' })
+  @ApiQuery({ name: 'periodId', required: false })
+  async getDashboardSummary(@Query('periodId') periodId?: string) {
+    const [trialBalance, profitLoss, balanceSheet] = await Promise.all([
+      this.financialService.getTrialBalance(periodId),
+      this.financialService.getFinancialStatements(periodId || 'current', 'profit-loss'),
+      this.financialService.getFinancialStatements(periodId || 'current', 'balance-sheet'),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        summary: {
+          totalAssets: balanceSheet?.totalAssets || 0,
+          totalLiabilities: balanceSheet?.totalLiabilities || 0,
+          totalEquity: balanceSheet?.totalEquity || 0,
+          totalRevenue: profitLoss?.totalRevenue || 0,
+          totalExpenses: profitLoss?.totalExpenses || 0,
+          netIncome: profitLoss?.netIncome || 0,
+        },
+        trialBalanceStatus: trialBalance?.isBalanced ? 'Balanced' : 'Out of Balance',
+        lastUpdated: new Date().toISOString(),
+      },
+      periodId,
+      timestamp: new Date().toISOString(),
+    };
+  }
+}

@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
-import * as rateLimit from 'express-rate-limit';
-import * as helmet from 'helmet';
+import helmet from 'helmet';
 
 export interface SecurityPolicy {
   rateLimits: {
@@ -35,10 +34,7 @@ export class SecurityService {
       rateLimits: {
         windowMs: 15 * 60 * 1000, // 15 minutes
         max: isDevelopment ? 1000 : 100, // limit each IP to 100 requests per windowMs
-        message: {
-          error: 'Too many requests from this IP',
-          retryAfter: '15 minutes',
-        },
+        message: 'Too many requests from this IP, please try again later',
       },
       cors: {
         origin: isDevelopment 
@@ -150,8 +146,8 @@ export class SecurityService {
 
   decryptSensitiveData(encryptedData: string): string {
     const key = this.configService.get('ENCRYPTION_KEY') || 'default-key-32-chars-long-please!';
-    const [ivHex, encrypted] = encryptedData.split(':');
-    const iv = Buffer.from(ivHex, 'hex');
+    const [_ivHex, encrypted] = encryptedData.split(':');
+    // const iv = Buffer.from(ivHex, 'hex');
     const decipher = crypto.createDecipher('aes-256-cbc', key);
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');

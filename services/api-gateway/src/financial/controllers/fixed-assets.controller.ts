@@ -1,1 +1,438 @@
-import {\n  Controller,\n  Get,\n  Post,\n  Put,\n  Delete,\n  Body,\n  Param,\n  Query,\n  UseGuards,\n  Req,\n} from '@nestjs/common';\nimport { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';\nimport { FinancialService } from '../financial.service';\nimport { FixedAssetsService } from '../services/fixed-assets.service';\nimport { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';\nimport { PermissionsGuard } from '../../auth/guards/permissions.guard';\nimport { Permissions } from '../../auth/decorators/permissions.decorator';\nimport { ThrottlerGuard } from '@nestjs/throttler';\n\n@ApiTags('Fixed Assets Management')\n@Controller('financial/fixed-assets')\n@UseGuards(ThrottlerGuard, JwtAuthGuard, PermissionsGuard)\n@ApiBearerAuth()\nexport class FixedAssetsController {\n  constructor(\n    private readonly financialService: FinancialService,\n    private readonly fixedAssetsService: FixedAssetsService,\n  ) {}\n\n  @Get()\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Fixed Assets' })\n  @ApiResponse({ status: 200, description: 'Fixed assets retrieved' })\n  @ApiQuery({ name: 'category', required: false, description: 'Asset category' })\n  @ApiQuery({ name: 'status', required: false, description: 'Asset status' })\n  @ApiQuery({ name: 'departmentId', required: false, description: 'Department ID' })\n  @ApiQuery({ name: 'page', required: false, description: 'Page number' })\n  @ApiQuery({ name: 'limit', required: false, description: 'Items per page' })\n  async getFixedAssets(\n    @Query('category') category?: string,\n    @Query('status') status?: string,\n    @Query('departmentId') departmentId?: string,\n    @Query('page') page?: number,\n    @Query('limit') limit?: number,\n  ) {\n    const filters = { category, status, departmentId, page, limit };\n    const result = await this.financialService.getFixedAssets(filters);\n    \n    return {\n      success: true,\n      data: result,\n      filters,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get(':id')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Fixed Asset by ID' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Fixed asset retrieved' })\n  async getFixedAsset(@Param('id') assetId: string) {\n    const result = await this.fixedAssetsService.getAssetById(assetId);\n    \n    return {\n      success: true,\n      data: result,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post()\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Create Fixed Asset' })\n  @ApiResponse({ status: 201, description: 'Fixed asset created successfully' })\n  async createFixedAsset(@Body() assetData: any, @Req() req: any) {\n    const enrichedData = {\n      ...assetData,\n      createdBy: req.user.sub,\n      createdAt: new Date().toISOString(),\n      status: 'ACTIVE',\n    };\n    \n    const result = await this.financialService.createFixedAsset(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Fixed asset created successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Put(':id')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Update Fixed Asset' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Fixed asset updated successfully' })\n  async updateFixedAsset(\n    @Param('id') assetId: string,\n    @Body() assetData: any,\n    @Req() req: any,\n  ) {\n    const enrichedData = {\n      ...assetData,\n      updatedBy: req.user.sub,\n      updatedAt: new Date().toISOString(),\n    };\n    \n    const result = await this.fixedAssetsService.updateAsset(assetId, enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Fixed asset updated successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Delete(':id')\n  @Permissions('finance:delete')\n  @ApiOperation({ summary: 'Delete Fixed Asset' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Fixed asset deleted successfully' })\n  async deleteFixedAsset(@Param('id') assetId: string) {\n    await this.fixedAssetsService.deleteAsset(assetId);\n    \n    return {\n      success: true,\n      message: 'Fixed asset deleted successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== DEPRECIATION MANAGEMENT =====\n  @Get(':id/depreciation')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Asset Depreciation Schedule' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Depreciation schedule retrieved' })\n  async getDepreciationSchedule(@Param('id') assetId: string) {\n    const result = await this.fixedAssetsService.getDepreciationSchedule(assetId);\n    \n    return {\n      success: true,\n      data: result,\n      assetId,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post(':id/depreciation/calculate')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Calculate Asset Depreciation' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Depreciation calculated successfully' })\n  async calculateDepreciation(\n    @Param('id') assetId: string,\n    @Body() calculationData: {\n      method: 'STRAIGHT_LINE' | 'DECLINING_BALANCE' | 'UNITS_OF_PRODUCTION';\n      usefulLife?: number;\n      salvageValue?: number;\n      depreciationRate?: number;\n      unitsProduced?: number;\n      totalUnitsExpected?: number;\n    },\n  ) {\n    const result = await this.financialService.calculateDepreciation(\n      assetId,\n      calculationData.method,\n      calculationData,\n    );\n    \n    return {\n      success: true,\n      data: result,\n      assetId,\n      method: calculationData.method,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post(':id/depreciation/record')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Record Depreciation Entry' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 201, description: 'Depreciation recorded successfully' })\n  async recordDepreciation(\n    @Param('id') assetId: string,\n    @Body() depreciationData: {\n      amount: number;\n      depreciationDate: string;\n      periodId: string;\n      notes?: string;\n    },\n    @Req() req: any,\n  ) {\n    const enrichedData = {\n      ...depreciationData,\n      assetId,\n      recordedBy: req.user.sub,\n      recordedAt: new Date().toISOString(),\n    };\n    \n    const result = await this.fixedAssetsService.recordDepreciation(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Depreciation recorded successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post('depreciation/run-batch/:periodId')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Run Batch Depreciation for Period' })\n  @ApiParam({ name: 'periodId', description: 'Accounting Period ID' })\n  @ApiResponse({ status: 200, description: 'Batch depreciation completed' })\n  async runBatchDepreciation(\n    @Param('periodId') periodId: string,\n    @Req() req: any,\n  ) {\n    const result = await this.financialService.runDepreciationSchedule(periodId);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Batch depreciation completed successfully',\n      periodId,\n      processedBy: req.user.sub,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== ASSET MAINTENANCE =====\n  @Get(':id/maintenance')\n  @Permissions('finance:read')\n  @ApiOperation({ summary: 'Get Asset Maintenance History' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Maintenance history retrieved' })\n  async getMaintenanceHistory(@Param('id') assetId: string) {\n    const result = await this.fixedAssetsService.getMaintenanceHistory(assetId);\n    \n    return {\n      success: true,\n      data: result,\n      assetId,\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Post(':id/maintenance')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Record Asset Maintenance' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 201, description: 'Maintenance recorded successfully' })\n  async recordMaintenance(\n    @Param('id') assetId: string,\n    @Body() maintenanceData: {\n      maintenanceType: 'PREVENTIVE' | 'CORRECTIVE' | 'EMERGENCY';\n      description: string;\n      cost: number;\n      maintenanceDate: string;\n      performedBy: string;\n      nextScheduledDate?: string;\n      notes?: string;\n    },\n    @Req() req: any,\n  ) {\n    const enrichedData = {\n      ...maintenanceData,\n      assetId,\n      recordedBy: req.user.sub,\n      recordedAt: new Date().toISOString(),\n    };\n    \n    const result = await this.fixedAssetsService.recordMaintenance(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Maintenance recorded successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== ASSET DISPOSAL =====\n  @Post(':id/disposal')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Record Asset Disposal' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Asset disposal recorded successfully' })\n  async recordDisposal(\n    @Param('id') assetId: string,\n    @Body() disposalData: {\n      disposalDate: string;\n      disposalMethod: 'SALE' | 'SCRAP' | 'DONATION' | 'TRADE_IN';\n      disposalValue: number;\n      buyerDetails?: string;\n      reason: string;\n      notes?: string;\n    },\n    @Req() req: any,\n  ) {\n    const enrichedData = {\n      ...disposalData,\n      assetId,\n      disposedBy: req.user.sub,\n      disposedAt: new Date().toISOString(),\n    };\n    \n    const result = await this.fixedAssetsService.recordDisposal(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Asset disposal recorded successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== ASSET TRANSFER =====\n  @Post(':id/transfer')\n  @Permissions('finance:write')\n  @ApiOperation({ summary: 'Transfer Asset Between Departments/Locations' })\n  @ApiParam({ name: 'id', description: 'Asset ID' })\n  @ApiResponse({ status: 200, description: 'Asset transferred successfully' })\n  async transferAsset(\n    @Param('id') assetId: string,\n    @Body() transferData: {\n      fromDepartmentId?: string;\n      toDepartmentId?: string;\n      fromLocationId?: string;\n      toLocationId?: string;\n      transferDate: string;\n      reason: string;\n      notes?: string;\n    },\n    @Req() req: any,\n  ) {\n    const enrichedData = {\n      ...transferData,\n      assetId,\n      transferredBy: req.user.sub,\n      transferredAt: new Date().toISOString(),\n    };\n    \n    const result = await this.fixedAssetsService.transferAsset(enrichedData);\n    \n    return {\n      success: true,\n      data: result,\n      message: 'Asset transferred successfully',\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  // ===== ASSET REPORTS =====\n  @Get('reports/depreciation-summary')\n  @Permissions('reports:read')\n  @ApiOperation({ summary: 'Get Depreciation Summary Report' })\n  @ApiResponse({ status: 200, description: 'Depreciation summary retrieved' })\n  @ApiQuery({ name: 'periodId', required: false, description: 'Period ID' })\n  @ApiQuery({ name: 'category', required: false, description: 'Asset category' })\n  async getDepreciationSummary(\n    @Query('periodId') periodId?: string,\n    @Query('category') category?: string,\n  ) {\n    const result = await this.fixedAssetsService.getDepreciationSummary({\n      periodId,\n      category,\n    });\n    \n    return {\n      success: true,\n      data: result,\n      reportType: 'Depreciation Summary',\n      parameters: { periodId, category },\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get('reports/asset-register')\n  @Permissions('reports:read')\n  @ApiOperation({ summary: 'Get Asset Register Report' })\n  @ApiResponse({ status: 200, description: 'Asset register retrieved' })\n  @ApiQuery({ name: 'asOfDate', required: false, description: 'As of date' })\n  @ApiQuery({ name: 'category', required: false, description: 'Asset category' })\n  @ApiQuery({ name: 'departmentId', required: false, description: 'Department ID' })\n  async getAssetRegister(\n    @Query('asOfDate') asOfDate?: string,\n    @Query('category') category?: string,\n    @Query('departmentId') departmentId?: string,\n  ) {\n    const result = await this.fixedAssetsService.getAssetRegister({\n      asOfDate,\n      category,\n      departmentId,\n    });\n    \n    return {\n      success: true,\n      data: result,\n      reportType: 'Asset Register',\n      parameters: { asOfDate, category, departmentId },\n      timestamp: new Date().toISOString(),\n    };\n  }\n\n  @Get('reports/maintenance-costs')\n  @Permissions('reports:read')\n  @ApiOperation({ summary: 'Get Maintenance Costs Report' })\n  @ApiResponse({ status: 200, description: 'Maintenance costs report retrieved' })\n  @ApiQuery({ name: 'fromDate', required: false })\n  @ApiQuery({ name: 'toDate', required: false })\n  @ApiQuery({ name: 'assetId', required: false })\n  async getMaintenanceCosts(\n    @Query('fromDate') fromDate?: string,\n    @Query('toDate') toDate?: string,\n    @Query('assetId') assetId?: string,\n  ) {\n    const result = await this.fixedAssetsService.getMaintenanceCosts({\n      fromDate,\n      toDate,\n      assetId,\n    });\n    \n    return {\n      success: true,\n      data: result,\n      reportType: 'Maintenance Costs',\n      parameters: { fromDate, toDate, assetId },\n      timestamp: new Date().toISOString(),\n    };\n  }\n}"
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { FinancialService } from '../financial.service';
+import { FixedAssetsService } from '../services/fixed-assets.service';
+import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard';
+import { Permissions } from '../../auth/decorators/permissions.decorator';
+import { ThrottlerGuard } from '@nestjs/throttler';
+
+@ApiTags('Fixed Assets Management')
+@Controller('financial/fixed-assets')
+@UseGuards(ThrottlerGuard, JwtAuthGuard, PermissionsGuard)
+@ApiBearerAuth()
+export class FixedAssetsController {
+  constructor(
+    private readonly financialService: FinancialService,
+    private readonly fixedAssetsService: FixedAssetsService,
+  ) {}
+
+  @Get()
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Fixed Assets' })
+  @ApiResponse({ status: 200, description: 'Fixed assets retrieved' })
+  @ApiQuery({ name: 'category', required: false, description: 'Asset category' })
+  @ApiQuery({ name: 'status', required: false, description: 'Asset status' })
+  @ApiQuery({ name: 'departmentId', required: false, description: 'Department ID' })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Items per page' })
+  async getFixedAssets(
+    @Query('category') category?: string,
+    @Query('status') status?: string,
+    @Query('departmentId') departmentId?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    const filters = { category, status, departmentId, page, limit };
+    const result = await this.financialService.getFixedAssets(filters);
+    
+    return {
+      success: true,
+      data: result,
+      filters,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get(':id')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Fixed Asset by ID' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Fixed asset retrieved' })
+  async getFixedAsset(@Param('id') assetId: string) {
+    const result = await this.fixedAssetsService.getAssetById(assetId);
+    
+    return {
+      success: true,
+      data: result,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post()
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Create Fixed Asset' })
+  @ApiResponse({ status: 201, description: 'Fixed asset created successfully' })
+  async createFixedAsset(@Body() assetData: any, @Req() req: any) {
+    const enrichedData = {
+      ...assetData,
+      createdBy: req.user.sub,
+      createdAt: new Date().toISOString(),
+      status: 'ACTIVE',
+    };
+    
+    const result = await this.financialService.createFixedAsset(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Fixed asset created successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Put(':id')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Update Fixed Asset' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Fixed asset updated successfully' })
+  async updateFixedAsset(
+    @Param('id') assetId: string,
+    @Body() assetData: any,
+    @Req() req: any,
+  ) {
+    const enrichedData = {
+      ...assetData,
+      updatedBy: req.user.sub,
+      updatedAt: new Date().toISOString(),
+    };
+    
+    const result = await this.fixedAssetsService.updateAsset(assetId, enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Fixed asset updated successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Delete(':id')
+  @Permissions('finance:delete')
+  @ApiOperation({ summary: 'Delete Fixed Asset' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Fixed asset deleted successfully' })
+  async deleteFixedAsset(@Param('id') assetId: string) {
+    await this.fixedAssetsService.deleteAsset(assetId);
+    
+    return {
+      success: true,
+      message: 'Fixed asset deleted successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== DEPRECIATION MANAGEMENT =====
+  @Get(':id/depreciation')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Asset Depreciation Schedule' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Depreciation schedule retrieved' })
+  async getDepreciationSchedule(@Param('id') assetId: string) {
+    const result = await this.fixedAssetsService.getDepreciationSchedule(assetId);
+    
+    return {
+      success: true,
+      data: result,
+      assetId,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post(':id/depreciation/calculate')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Calculate Asset Depreciation' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Depreciation calculated successfully' })
+  async calculateDepreciation(
+    @Param('id') assetId: string,
+    @Body() calculationData: {
+      method: 'STRAIGHT_LINE' | 'DECLINING_BALANCE' | 'UNITS_OF_PRODUCTION';
+      usefulLife?: number;
+      salvageValue?: number;
+      depreciationRate?: number;
+      unitsProduced?: number;
+      totalUnitsExpected?: number;
+    },
+  ) {
+    const result = await this.financialService.calculateDepreciation(
+      assetId,
+      calculationData.method,
+      calculationData,
+    );
+    
+    return {
+      success: true,
+      data: result,
+      assetId,
+      method: calculationData.method,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post(':id/depreciation/record')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Record Depreciation Entry' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 201, description: 'Depreciation recorded successfully' })
+  async recordDepreciation(
+    @Param('id') assetId: string,
+    @Body() depreciationData: {
+      amount: number;
+      depreciationDate: string;
+      periodId: string;
+      notes?: string;
+    },
+    @Req() req: any,
+  ) {
+    const enrichedData = {
+      ...depreciationData,
+      assetId,
+      recordedBy: req.user.sub,
+      recordedAt: new Date().toISOString(),
+    };
+    
+    const result = await this.fixedAssetsService.recordDepreciation(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Depreciation recorded successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post('depreciation/run-batch/:periodId')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Run Batch Depreciation for Period' })
+  @ApiParam({ name: 'periodId', description: 'Accounting Period ID' })
+  @ApiResponse({ status: 200, description: 'Batch depreciation completed' })
+  async runBatchDepreciation(
+    @Param('periodId') periodId: string,
+    @Req() req: any,
+  ) {
+    const result = await this.financialService.runDepreciationSchedule(periodId);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Batch depreciation completed successfully',
+      periodId,
+      processedBy: req.user.sub,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== ASSET MAINTENANCE =====
+  @Get(':id/maintenance')
+  @Permissions('finance:read')
+  @ApiOperation({ summary: 'Get Asset Maintenance History' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Maintenance history retrieved' })
+  async getMaintenanceHistory(@Param('id') assetId: string) {
+    const result = await this.fixedAssetsService.getMaintenanceHistory(assetId);
+    
+    return {
+      success: true,
+      data: result,
+      assetId,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Post(':id/maintenance')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Record Asset Maintenance' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 201, description: 'Maintenance recorded successfully' })
+  async recordMaintenance(
+    @Param('id') assetId: string,
+    @Body() maintenanceData: {
+      maintenanceType: 'PREVENTIVE' | 'CORRECTIVE' | 'EMERGENCY';
+      description: string;
+      cost: number;
+      maintenanceDate: string;
+      performedBy: string;
+      nextScheduledDate?: string;
+      notes?: string;
+    },
+    @Req() req: any,
+  ) {
+    const enrichedData = {
+      ...maintenanceData,
+      assetId,
+      recordedBy: req.user.sub,
+      recordedAt: new Date().toISOString(),
+    };
+    
+    const result = await this.fixedAssetsService.recordMaintenance(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Maintenance recorded successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== ASSET DISPOSAL =====
+  @Post(':id/disposal')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Record Asset Disposal' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Asset disposal recorded successfully' })
+  async recordDisposal(
+    @Param('id') assetId: string,
+    @Body() disposalData: {
+      disposalDate: string;
+      disposalMethod: 'SALE' | 'SCRAP' | 'DONATION' | 'TRADE_IN';
+      disposalValue: number;
+      buyerDetails?: string;
+      reason: string;
+      notes?: string;
+    },
+    @Req() req: any,
+  ) {
+    const enrichedData = {
+      ...disposalData,
+      assetId,
+      disposedBy: req.user.sub,
+      disposedAt: new Date().toISOString(),
+    };
+    
+    const result = await this.fixedAssetsService.recordDisposal(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Asset disposal recorded successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== ASSET TRANSFER =====
+  @Post(':id/transfer')
+  @Permissions('finance:write')
+  @ApiOperation({ summary: 'Transfer Asset Between Departments/Locations' })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 200, description: 'Asset transferred successfully' })
+  async transferAsset(
+    @Param('id') assetId: string,
+    @Body() transferData: {
+      fromDepartmentId?: string;
+      toDepartmentId?: string;
+      fromLocationId?: string;
+      toLocationId?: string;
+      transferDate: string;
+      reason: string;
+      notes?: string;
+    },
+    @Req() req: any,
+  ) {
+    const enrichedData = {
+      ...transferData,
+      assetId,
+      transferredBy: req.user.sub,
+      transferredAt: new Date().toISOString(),
+    };
+    
+    const result = await this.fixedAssetsService.transferAsset(enrichedData);
+    
+    return {
+      success: true,
+      data: result,
+      message: 'Asset transferred successfully',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ===== ASSET REPORTS =====
+  @Get('reports/depreciation-summary')
+  @Permissions('reports:read')
+  @ApiOperation({ summary: 'Get Depreciation Summary Report' })
+  @ApiResponse({ status: 200, description: 'Depreciation summary retrieved' })
+  @ApiQuery({ name: 'periodId', required: false, description: 'Period ID' })
+  @ApiQuery({ name: 'category', required: false, description: 'Asset category' })
+  async getDepreciationSummary(
+    @Query('periodId') periodId?: string,
+    @Query('category') category?: string,
+  ) {
+    const result = await this.fixedAssetsService.getDepreciationSummary({
+      periodId,
+      category,
+    });
+    
+    return {
+      success: true,
+      data: result,
+      reportType: 'Depreciation Summary',
+      parameters: { periodId, category },
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('reports/asset-register')
+  @Permissions('reports:read')
+  @ApiOperation({ summary: 'Get Asset Register Report' })
+  @ApiResponse({ status: 200, description: 'Asset register retrieved' })
+  @ApiQuery({ name: 'asOfDate', required: false, description: 'As of date' })
+  @ApiQuery({ name: 'category', required: false, description: 'Asset category' })
+  @ApiQuery({ name: 'departmentId', required: false, description: 'Department ID' })
+  async getAssetRegister(
+    @Query('asOfDate') asOfDate?: string,
+    @Query('category') category?: string,
+    @Query('departmentId') departmentId?: string,
+  ) {
+    const result = await this.fixedAssetsService.getAssetRegister({
+      asOfDate,
+      category,
+      departmentId,
+    });
+    
+    return {
+      success: true,
+      data: result,
+      reportType: 'Asset Register',
+      parameters: { asOfDate, category, departmentId },
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('reports/maintenance-costs')
+  @Permissions('reports:read')
+  @ApiOperation({ summary: 'Get Maintenance Costs Report' })
+  @ApiResponse({ status: 200, description: 'Maintenance costs report retrieved' })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'assetId', required: false })
+  async getMaintenanceCosts(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('assetId') assetId?: string,
+  ) {
+    const result = await this.fixedAssetsService.getMaintenanceCosts({
+      fromDate,
+      toDate,
+      assetId,
+    });
+    
+    return {
+      success: true,
+      data: result,
+      reportType: 'Maintenance Costs',
+      parameters: { fromDate, toDate, assetId },
+      timestamp: new Date().toISOString(),
+    };
+  }
+}

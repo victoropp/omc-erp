@@ -3,7 +3,6 @@ import {
   Post,
   Body,
   Get,
-  Req,
   Headers,
   HttpCode,
   HttpStatus,
@@ -11,8 +10,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { ProxyService } from '../proxy/proxy.service';
-import { Request } from 'express';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { Public } from './jwt-auth.guard';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -21,6 +20,7 @@ export class AuthController {
   constructor(private readonly proxyService: ProxyService) {}
 
   @Post('register')
+  @Public()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register a new user' })
   @ApiResponse({ status: 201, description: 'User successfully registered' })
@@ -29,13 +29,14 @@ export class AuthController {
     return this.proxyService.forwardRequest(
       'auth',
       'POST',
-      '/api/v1/auth/register',
+      '/register',
       registerDto,
       headers,
     );
   }
 
   @Post('login')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'User login' })
   @ApiResponse({ status: 200, description: 'Successfully logged in' })
@@ -44,7 +45,7 @@ export class AuthController {
     return this.proxyService.forwardRequest(
       'auth',
       'POST',
-      '/api/v1/auth/login',
+      '/login',
       loginDto,
       headers,
     );
@@ -58,7 +59,7 @@ export class AuthController {
     return this.proxyService.forwardRequest(
       'auth',
       'POST',
-      '/api/v1/auth/refresh',
+      '/refresh',
       refreshDto,
       headers,
     );
@@ -73,13 +74,14 @@ export class AuthController {
     return this.proxyService.forwardRequest(
       'auth',
       'POST',
-      '/api/v1/auth/logout',
+      '/logout',
       {},
       headers,
     );
   }
 
   @Post('forgot-password')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request password reset' })
   @ApiResponse({ status: 200, description: 'Password reset email sent' })
@@ -87,13 +89,14 @@ export class AuthController {
     return this.proxyService.forwardRequest(
       'auth',
       'POST',
-      '/api/v1/auth/forgot-password',
+      '/forgot-password',
       forgotPasswordDto,
       headers,
     );
   }
 
   @Post('reset-password')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset password with token' })
   @ApiResponse({ status: 200, description: 'Password reset successfully' })
@@ -101,7 +104,7 @@ export class AuthController {
     return this.proxyService.forwardRequest(
       'auth',
       'POST',
-      '/api/v1/auth/reset-password',
+      '/reset-password',
       resetPasswordDto,
       headers,
     );
@@ -115,7 +118,7 @@ export class AuthController {
     return this.proxyService.forwardRequest(
       'auth',
       'GET',
-      '/api/v1/auth/profile',
+      '/profile',
       null,
       headers,
     );

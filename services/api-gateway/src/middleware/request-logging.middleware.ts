@@ -17,7 +17,7 @@ export class RequestLoggingMiddleware implements NestMiddleware {
 
     // Override res.end to log response details
     const originalEnd = res.end;
-    res.end = function(...args: any[]) {
+    (res.end as any) = function(...args: any[]) {
       const responseTime = Date.now() - startTime;
       const contentLength = res.get('content-length') || 0;
       
@@ -26,7 +26,7 @@ export class RequestLoggingMiddleware implements NestMiddleware {
         `[${req['requestId']}] Response: ${res.statusCode} ${res.statusMessage} - ${contentLength} bytes - ${responseTime}ms`
       );
       
-      originalEnd.apply(res, args);
+      return originalEnd.apply(res, args);
     };
 
     next();

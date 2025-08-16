@@ -1,0 +1,83 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const common_1 = require("@nestjs/common");
+nimport;
+{
+    ConfigService;
+}
+from;
+'@nestjs/config';
+nimport;
+{
+    Cache;
+}
+from;
+'cache-manager';
+nimport;
+{
+    Inject, CACHE_MANAGER;
+}
+from;
+'@nestjs/cache-manager';
+n;
+ninterface;
+Permission;
+{
+    n;
+    id: string;
+    n;
+    name: string;
+    n;
+    description: string;
+    n;
+    resource: string;
+    n;
+    action: string;
+    n;
+    createdAt: Date;
+    n;
+}
+n;
+ninterface;
+Role;
+{
+    n;
+    id: string;
+    n;
+    name: string;
+    n;
+    description: string;
+    n;
+    permissions: Permission[];
+    n;
+    isSystem: boolean;
+    n;
+    createdAt: Date;
+    n;
+    updatedAt: Date;
+    n;
+}
+n;
+ninterface;
+UserRole;
+{
+    n;
+    userId: string;
+    n;
+    roleId: string;
+    n;
+    assignedAt: Date;
+    n;
+    assignedBy: string;
+    n;
+}
+n;
+n;
+nexport;
+class RbacService {
+    n;
+    logger = new common_1.Logger(RbacService.name);
+    n;
+    permissionCacheTTL = 60 * 60 * 1000;
+} // 1 hour\n\n  // In-memory storage for demo - replace with database\n  private permissions: Map<string, Permission> = new Map();\n  private roles: Map<string, Role> = new Map();\n  private userRoles: Map<string, UserRole[]> = new Map();\n\n  constructor(\n    private configService: ConfigService,\n    @Inject(CACHE_MANAGER) private cacheManager: Cache,\n  ) {\n    this.initializeDefaultPermissionsAndRoles();\n  }\n\n  // Permission Management\n  async createPermission(permissionData: Omit<Permission, 'id' | 'createdAt'>): Promise<Permission> {\n    const id = this.generateId();\n    \n    // Check if permission with same name already exists\n    const existing = Array.from(this.permissions.values()).find(p => p.name === permissionData.name);\n    if (existing) {\n      throw new BadRequestException(`Permission '${permissionData.name}' already exists`);\n    }\n\n    const permission: Permission = {\n      id,\n      ...permissionData,\n      createdAt: new Date(),\n    };\n\n    this.permissions.set(id, permission);\n    \n    // Invalidate permission cache\n    await this.clearPermissionCache();\n    \n    this.logger.log(`Permission created: ${permission.name}`);\n    return permission;\n  }\n\n  async getAllPermissions(): Promise<Permission[]> {\n    return Array.from(this.permissions.values());\n  }\n\n  async getPermissionById(id: string): Promise<Permission | null> {\n    return this.permissions.get(id) || null;\n  }\n\n  async getPermissionsByResource(resource: string): Promise<Permission[]> {\n    return Array.from(this.permissions.values()).filter(p => p.resource === resource);\n  }\n\n  // Role Management\n  async createRole(roleData: Omit<Role, 'id' | 'permissions' | 'createdAt' | 'updatedAt'> & { permissionIds: string[] }): Promise<Role> {\n    const id = this.generateId();\n    \n    // Check if role with same name already exists\n    const existing = Array.from(this.roles.values()).find(r => r.name === roleData.name);\n    if (existing) {\n      throw new BadRequestException(`Role '${roleData.name}' already exists`);\n    }\n\n    // Validate permission IDs\n    const permissions = roleData.permissionIds.map(permId => {\n      const permission = this.permissions.get(permId);\n      if (!permission) {\n        throw new BadRequestException(`Permission with ID '${permId}' not found`);\n      }\n      return permission;\n    });\n\n    const role: Role = {\n      id,\n      name: roleData.name,\n      description: roleData.description,\n      isSystem: roleData.isSystem || false,\n      permissions,\n      createdAt: new Date(),\n      updatedAt: new Date(),\n    };\n\n    this.roles.set(id, role);\n    \n    // Invalidate role cache\n    await this.clearRoleCache();\n    \n    this.logger.log(`Role created: ${role.name}`);\n    return role;\n  }\n\n  async updateRole(id: string, updates: { description?: string; permissionIds?: string[] }): Promise<Role> {\n    const role = this.roles.get(id);\n    if (!role) {\n      throw new NotFoundException(`Role with ID '${id}' not found`);\n    }\n\n    if (role.isSystem) {\n      throw new BadRequestException('Cannot modify system roles');\n    }\n\n    if (updates.description !== undefined) {\n      role.description = updates.description;\n    }\n\n    if (updates.permissionIds !== undefined) {\n      // Validate permission IDs\n      const permissions = updates.permissionIds.map(permId => {\n        const permission = this.permissions.get(permId);\n        if (!permission) {\n          throw new BadRequestException(`Permission with ID '${permId}' not found`);\n        }\n        return permission;\n      });\n      role.permissions = permissions;\n    }\n\n    role.updatedAt = new Date();\n    this.roles.set(id, role);\n    \n    // Invalidate caches\n    await this.clearRoleCache();\n    await this.clearUserPermissionCache();\n    \n    this.logger.log(`Role updated: ${role.name}`);\n    return role;\n  }\n\n  async deleteRole(id: string): Promise<void> {\n    const role = this.roles.get(id);\n    if (!role) {\n      throw new NotFoundException(`Role with ID '${id}' not found`);\n    }\n\n    if (role.isSystem) {\n      throw new BadRequestException('Cannot delete system roles');\n    }\n\n    // Check if role is assigned to any users\n    const assignedUsers = Array.from(this.userRoles.values()).flat().filter(ur => ur.roleId === id);\n    if (assignedUsers.length > 0) {\n      throw new BadRequestException('Cannot delete role that is assigned to users');\n    }\n\n    this.roles.delete(id);\n    \n    // Invalidate caches\n    await this.clearRoleCache();\n    \n    this.logger.log(`Role deleted: ${role.name}`);\n  }\n\n  async getAllRoles(): Promise<Role[]> {\n    return Array.from(this.roles.values());\n  }\n\n  async getRoleById(id: string): Promise<Role | null> {\n    return this.roles.get(id) || null;\n  }\n\n  // User Role Management\n  async assignRoleToUser(userId: string, roleId: string, assignedBy: string): Promise<void> {\n    const role = this.roles.get(roleId);\n    if (!role) {\n      throw new NotFoundException(`Role with ID '${roleId}' not found`);\n    }\n\n    const userRoles = this.userRoles.get(userId) || [];\n    \n    // Check if user already has this role\n    const existing = userRoles.find(ur => ur.roleId === roleId);\n    if (existing) {\n      throw new BadRequestException(`User already has role '${role.name}'`);\n    }\n\n    const userRole: UserRole = {\n      userId,\n      roleId,\n      assignedAt: new Date(),\n      assignedBy,\n    };\n\n    userRoles.push(userRole);\n    this.userRoles.set(userId, userRoles);\n    \n    // Invalidate user permission cache\n    await this.clearUserPermissionCache(userId);\n    \n    this.logger.log(`Role '${role.name}' assigned to user ${userId}`);\n  }\n\n  async removeRoleFromUser(userId: string, roleId: string): Promise<void> {\n    const userRoles = this.userRoles.get(userId) || [];\n    const index = userRoles.findIndex(ur => ur.roleId === roleId);\n    \n    if (index === -1) {\n      throw new NotFoundException('User does not have this role');\n    }\n\n    const role = this.roles.get(roleId);\n    userRoles.splice(index, 1);\n    this.userRoles.set(userId, userRoles);\n    \n    // Invalidate user permission cache\n    await this.clearUserPermissionCache(userId);\n    \n    this.logger.log(`Role '${role?.name}' removed from user ${userId}`);\n  }\n\n  async getUserRoles(userId: string): Promise<Role[]> {\n    const userRoles = this.userRoles.get(userId) || [];\n    return userRoles\n      .map(ur => this.roles.get(ur.roleId))\n      .filter(role => role !== undefined) as Role[];\n  }\n\n  // Permission Checking\n  async hasPermission(userId: string, permission: string, resource?: string): Promise<boolean> {\n    const cacheKey = `user_permissions:${userId}`;\n    let userPermissions = await this.cacheManager.get<string[]>(cacheKey);\n    \n    if (!userPermissions) {\n      userPermissions = await this.getUserPermissions(userId);\n      await this.cacheManager.set(cacheKey, userPermissions, this.permissionCacheTTL);\n    }\n\n    // Check exact permission match\n    if (userPermissions.includes(permission)) {\n      return true;\n    }\n\n    // Check resource-specific permission\n    if (resource) {\n      const resourcePermission = `${resource}:${permission}`;\n      if (userPermissions.includes(resourcePermission)) {\n        return true;\n      }\n    }\n\n    // Check wildcard permissions\n    const wildcardGlobal = `*:${permission}`;\n    if (userPermissions.includes(wildcardGlobal)) {\n      return true;\n    }\n\n    if (resource) {\n      const wildcardResource = `${resource}:*`;\n      if (userPermissions.includes(wildcardResource)) {\n        return true;\n      }\n    }\n\n    return false;\n  }\n\n  async hasAnyPermission(userId: string, permissions: string[]): Promise<boolean> {\n    for (const permission of permissions) {\n      if (await this.hasPermission(userId, permission)) {\n        return true;\n      }\n    }\n    return false;\n  }\n\n  async hasAllPermissions(userId: string, permissions: string[]): Promise<boolean> {\n    for (const permission of permissions) {\n      if (!(await this.hasPermission(userId, permission))) {\n        return false;\n      }\n    }\n    return true;\n  }\n\n  async getUserPermissions(userId: string): Promise<string[]> {\n    const userRoles = await this.getUserRoles(userId);\n    const permissions = new Set<string>();\n\n    userRoles.forEach(role => {\n      role.permissions.forEach(permission => {\n        permissions.add(permission.name);\n        permissions.add(`${permission.resource}:${permission.action}`);\n      });\n    });\n\n    return Array.from(permissions);\n  }\n\n  // Cache Management\n  private async clearPermissionCache(): Promise<void> {\n    // In a real implementation, you'd use cache patterns or tags\n    // For now, just log\n    this.logger.debug('Permission cache cleared');\n  }\n\n  private async clearRoleCache(): Promise<void> {\n    this.logger.debug('Role cache cleared');\n  }\n\n  private async clearUserPermissionCache(userId?: string): Promise<void> {\n    if (userId) {\n      await this.cacheManager.del(`user_permissions:${userId}`);\n    } else {\n      // Clear all user permission caches - implementation would depend on cache store\n      this.logger.debug('All user permission caches cleared');\n    }\n  }\n\n  // Utilities\n  private generateId(): string {\n    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;\n  }\n\n  private initializeDefaultPermissionsAndRoles(): void {\n    // Initialize default permissions\n    const defaultPermissions = [\n      // User management\n      { name: 'users:read', description: 'View users', resource: 'users', action: 'read' },\n      { name: 'users:write', description: 'Create/update users', resource: 'users', action: 'write' },\n      { name: 'users:delete', description: 'Delete users', resource: 'users', action: 'delete' },\n      \n      // Station management\n      { name: 'stations:read', description: 'View stations', resource: 'stations', action: 'read' },\n      { name: 'stations:write', description: 'Create/update stations', resource: 'stations', action: 'write' },\n      { name: 'stations:delete', description: 'Delete stations', resource: 'stations', action: 'delete' },\n      \n      // Transaction management\n      { name: 'transactions:read', description: 'View transactions', resource: 'transactions', action: 'read' },\n      { name: 'transactions:write', description: 'Create/update transactions', resource: 'transactions', action: 'write' },\n      { name: 'transactions:approve', description: 'Approve transactions', resource: 'transactions', action: 'approve' },\n      \n      // Inventory management\n      { name: 'inventory:read', description: 'View inventory', resource: 'inventory', action: 'read' },\n      { name: 'inventory:write', description: 'Manage inventory', resource: 'inventory', action: 'write' },\n      { name: 'inventory:audit', description: 'Perform inventory audits', resource: 'inventory', action: 'audit' },\n      \n      // Financial management\n      { name: 'finance:read', description: 'View financial data', resource: 'finance', action: 'read' },\n      { name: 'finance:write', description: 'Manage financial data', resource: 'finance', action: 'write' },\n      { name: 'finance:approve', description: 'Approve financial transactions', resource: 'finance', action: 'approve' },\n      \n      // Reports\n      { name: 'reports:read', description: 'View reports', resource: 'reports', action: 'read' },\n      { name: 'reports:create', description: 'Create custom reports', resource: 'reports', action: 'create' },\n      \n      // System administration\n      { name: 'system:configure', description: 'Configure system settings', resource: 'system', action: 'configure' },\n      { name: 'system:monitor', description: 'Monitor system health', resource: 'system', action: 'monitor' },\n      { name: 'system:backup', description: 'Perform system backups', resource: 'system', action: 'backup' },\n      \n      // Profile management\n      { name: 'profile:read', description: 'View own profile', resource: 'profile', action: 'read' },\n      { name: 'profile:write', description: 'Update own profile', resource: 'profile', action: 'write' },\n    ];\n\n    defaultPermissions.forEach(permData => {\n      const id = this.generateId();\n      this.permissions.set(id, {\n        id,\n        ...permData,\n        createdAt: new Date(),\n      });\n    });\n\n    // Initialize default roles\n    const adminPermissions = Array.from(this.permissions.values());\n    const managerPermissions = adminPermissions.filter(p => \n      !p.name.includes('delete') && !p.name.includes('system:')\n    );\n    const operatorPermissions = adminPermissions.filter(p => \n      p.resource === 'stations' || p.resource === 'transactions' || p.resource === 'inventory' || p.resource === 'profile'\n    );\n    const userPermissions = adminPermissions.filter(p => p.resource === 'profile');\n\n    const defaultRoles = [\n      {\n        name: 'admin',\n        description: 'System Administrator',\n        permissions: adminPermissions,\n        isSystem: true,\n      },\n      {\n        name: 'manager',\n        description: 'Station Manager',\n        permissions: managerPermissions,\n        isSystem: true,\n      },\n      {\n        name: 'operator',\n        description: 'Station Operator',\n        permissions: operatorPermissions,\n        isSystem: true,\n      },\n      {\n        name: 'user',\n        description: 'Basic User',\n        permissions: userPermissions,\n        isSystem: true,\n      },\n    ];\n\n    defaultRoles.forEach(roleData => {\n      const id = this.generateId();\n      this.roles.set(id, {\n        id,\n        ...roleData,\n        createdAt: new Date(),\n        updatedAt: new Date(),\n      });\n    });\n\n    this.logger.log('Default permissions and roles initialized');\n  }\n}
+//# sourceMappingURL=rbac.service.js.map

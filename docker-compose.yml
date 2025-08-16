@@ -124,7 +124,13 @@ services:
       PORT: 3010
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USERNAME: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_NAME: omc_erp_dev
     depends_on:
+      - postgres
       - redis
     networks:
       - omc-erp-network
@@ -141,8 +147,14 @@ services:
     environment:
       NODE_ENV: development
       PORT: 3000
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USERNAME: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_NAME: omc_erp_dev
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      MONGODB_URL: mongodb://admin:admin@mongodb:27017/omc_erp_docs?authSource=admin
       SERVICE_REGISTRY_URL: http://service-registry:3010
       AUTH_SERVICE_URL: http://auth-service:3001
       TRANSACTION_SERVICE_URL: http://transaction-service:3002
@@ -155,6 +167,8 @@ services:
       ACCOUNTING_SERVICE_URL: http://accounting-service:3011
       CONFIGURATION_SERVICE_URL: http://configuration-service:3012
     depends_on:
+      - postgres
+      - mongodb
       - redis
       - service-registry
     networks:

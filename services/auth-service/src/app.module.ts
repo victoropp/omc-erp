@@ -5,7 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
-import { User, Tenant } from '@omc-erp/database';
+import { User, Tenant, Station } from '@omc-erp/database';
 
 @Module({
   imports: [
@@ -20,14 +20,26 @@ import { User, Tenant } from '@omc-erp/database';
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
-        host: configService.get('DB_HOST', 'localhost'),
-        port: configService.get('DB_PORT', 5432),
-        username: configService.get('DB_USER', 'postgres'),
-        password: configService.get('DB_PASSWORD', 'postgres'),
-        database: configService.get('DB_NAME', 'omc_erp_dev'),
-        entities: [User, Tenant],
+        host: configService.get('DB_HOST') || configService.get('DATABASE_HOST', 'localhost'),
+        port: configService.get('DB_PORT') || configService.get('DATABASE_PORT', 5434),
+        username: configService.get('DB_USER') || configService.get('DATABASE_USERNAME', 'postgres'),
+        password: configService.get('DB_PASSWORD') || configService.get('DATABASE_PASSWORD', 'postgres'),
+        database: configService.get('DB_NAME') || configService.get('DATABASE_NAME', 'omc_erp'),
+        entities: [User, Tenant, Station],
+        autoLoadEntities: false,
         synchronize: false, // Never true in production
         logging: configService.get('NODE_ENV') === 'development',
+        // Connection pool settings
+        extra: {
+          connectionLimit: 10,
+          acquireTimeout: 60000,
+          timeout: 60000,
+        },
+        // Retry logic
+        retryAttempts: 5,
+        retryDelay: 3000,
+        connectTimeoutMS: 10000,
+        maxQueryExecutionTime: 30000,
       }),
       inject: [ConfigService],
     }),

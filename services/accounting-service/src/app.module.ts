@@ -43,7 +43,7 @@ import { AccountingGateway } from './gateways/accounting.gateway';
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
         host: configService.get('DATABASE_HOST', 'localhost'),
-        port: configService.get<number>('DATABASE_PORT', 5432),
+        port: configService.get<number>('DATABASE_PORT', 5434),
         username: configService.get('DATABASE_USERNAME', 'postgres'),
         password: configService.get('DATABASE_PASSWORD', 'password'),
         database: configService.get('DATABASE_NAME', 'omc_erp'),

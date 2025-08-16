@@ -1,1 +1,523 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';\nimport { HttpService } from '@nestjs/axios';\nimport { ConfigService } from '@nestjs/config';\nimport { Cache } from 'cache-manager';\nimport { Inject, CACHE_MANAGER } from '@nestjs/cache-manager';\nimport { lastValueFrom } from 'rxjs';\n\nexport interface FixedAsset {\n  id: string;\n  assetNumber: string;\n  name: string;\n  description?: string;\n  category: string;\n  subCategory?: string;\n  acquisitionDate: string;\n  acquisitionCost: number;\n  currentValue: number;\n  accumulatedDepreciation: number;\n  netBookValue: number;\n  usefulLife: number;\n  salvageValue: number;\n  depreciationMethod: 'STRAIGHT_LINE' | 'DECLINING_BALANCE' | 'UNITS_OF_PRODUCTION';\n  status: 'ACTIVE' | 'DISPOSED' | 'UNDER_MAINTENANCE' | 'RETIRED';\n  locationId?: string;\n  departmentId?: string;\n  responsiblePersonId?: string;\n  serialNumber?: string;\n  model?: string;\n  manufacturer?: string;\n  warrantyExpiryDate?: string;\n  insuranceDetails?: any;\n  customFields?: Record<string, any>;\n  createdAt: string;\n  updatedAt: string;\n  createdBy: string;\n  updatedBy?: string;\n}\n\nexport interface DepreciationEntry {\n  id: string;\n  assetId: string;\n  depreciationDate: string;\n  periodId: string;\n  depreciationAmount: number;\n  accumulatedDepreciation: number;\n  netBookValue: number;\n  method: string;\n  isReversed: boolean;\n  journalEntryId?: string;\n  notes?: string;\n  createdAt: string;\n  createdBy: string;\n}\n\nexport interface MaintenanceRecord {\n  id: string;\n  assetId: string;\n  maintenanceType: 'PREVENTIVE' | 'CORRECTIVE' | 'EMERGENCY';\n  description: string;\n  cost: number;\n  maintenanceDate: string;\n  performedBy: string;\n  nextScheduledDate?: string;\n  status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';\n  notes?: string;\n  attachments?: string[];\n  createdAt: string;\n  createdBy: string;\n}\n\n@Injectable()\nexport class FixedAssetsService {\n  private readonly logger = new Logger(FixedAssetsService.name);\n  private readonly serviceUrl: string;\n\n  constructor(\n    private httpService: HttpService,\n    private configService: ConfigService,\n    @Inject(CACHE_MANAGER) private cacheManager: Cache,\n  ) {\n    this.serviceUrl = this.configService.get('FIXED_ASSETS_SERVICE_URL', 'http://localhost:3006');\n  }\n\n  async getAssetById(assetId: string): Promise<FixedAsset> {\n    const cacheKey = `fixed_asset:${assetId}`;\n    const cached = await this.cacheManager.get<FixedAsset>(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    try {\n      const response = await lastValueFrom(\n        this.httpService.get(`${this.serviceUrl}/assets/${assetId}`)\n      );\n      \n      const asset = response.data;\n      await this.cacheManager.set(cacheKey, asset, 600000); // 10 minutes\n      \n      return asset;\n    } catch (error) {\n      if (error.response?.status === 404) {\n        throw new NotFoundException(`Fixed asset with ID ${assetId} not found`);\n      }\n      throw error;\n    }\n  }\n\n  async updateAsset(assetId: string, assetData: Partial<FixedAsset>): Promise<FixedAsset> {\n    try {\n      const response = await lastValueFrom(\n        this.httpService.put(`${this.serviceUrl}/assets/${assetId}`, assetData)\n      );\n      \n      // Clear cache\n      await this.cacheManager.del(`fixed_asset:${assetId}`);\n      await this.clearAssetCaches();\n      \n      return response.data;\n    } catch (error) {\n      this.logger.error(`Failed to update asset ${assetId}`, error.response?.data || error.message);\n      throw error;\n    }\n  }\n\n  async deleteAsset(assetId: string): Promise<void> {\n    // First check if asset can be deleted (no transactions, not disposed, etc.)\n    const asset = await this.getAssetById(assetId);\n    \n    if (asset.status === 'DISPOSED') {\n      throw new BadRequestException('Cannot delete disposed asset');\n    }\n\n    // Check for existing depreciation entries\n    const depreciationEntries = await this.getDepreciationEntries(assetId);\n    if (depreciationEntries.length > 0) {\n      throw new BadRequestException('Cannot delete asset with depreciation entries');\n    }\n\n    try {\n      await lastValueFrom(\n        this.httpService.delete(`${this.serviceUrl}/assets/${assetId}`)\n      );\n      \n      // Clear caches\n      await this.cacheManager.del(`fixed_asset:${assetId}`);\n      await this.clearAssetCaches();\n      \n      this.logger.log(`Asset ${assetId} deleted successfully`);\n    } catch (error) {\n      this.logger.error(`Failed to delete asset ${assetId}`, error.response?.data || error.message);\n      throw error;\n    }\n  }\n\n  async getDepreciationSchedule(assetId: string): Promise<any> {\n    const cacheKey = `depreciation_schedule:${assetId}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    try {\n      const response = await lastValueFrom(\n        this.httpService.get(`${this.serviceUrl}/assets/${assetId}/depreciation/schedule`)\n      );\n      \n      const schedule = response.data;\n      await this.cacheManager.set(cacheKey, schedule, 1800000); // 30 minutes\n      \n      return schedule;\n    } catch (error) {\n      this.logger.error(`Failed to get depreciation schedule for asset ${assetId}`, error.message);\n      throw error;\n    }\n  }\n\n  async getDepreciationEntries(assetId: string): Promise<DepreciationEntry[]> {\n    try {\n      const response = await lastValueFrom(\n        this.httpService.get(`${this.serviceUrl}/assets/${assetId}/depreciation/entries`)\n      );\n      \n      return response.data;\n    } catch (error) {\n      this.logger.error(`Failed to get depreciation entries for asset ${assetId}`, error.message);\n      throw error;\n    }\n  }\n\n  async recordDepreciation(depreciationData: {\n    assetId: string;\n    amount: number;\n    depreciationDate: string;\n    periodId: string;\n    notes?: string;\n    recordedBy: string;\n    recordedAt: string;\n  }): Promise<DepreciationEntry> {\n    try {\n      // Validate asset exists and is active\n      const asset = await this.getAssetById(depreciationData.assetId);\n      \n      if (asset.status !== 'ACTIVE') {\n        throw new BadRequestException('Can only record depreciation for active assets');\n      }\n\n      // Check if depreciation would exceed asset cost\n      const currentAccumulated = asset.accumulatedDepreciation;\n      const newAccumulated = currentAccumulated + depreciationData.amount;\n      const maxDepreciation = asset.acquisitionCost - asset.salvageValue;\n      \n      if (newAccumulated > maxDepreciation) {\n        throw new BadRequestException(\n          `Depreciation amount would exceed maximum depreciable amount of ${maxDepreciation}`\n        );\n      }\n\n      const response = await lastValueFrom(\n        this.httpService.post(\n          `${this.serviceUrl}/assets/${depreciationData.assetId}/depreciation/record`,\n          depreciationData\n        )\n      );\n      \n      // Clear related caches\n      await this.cacheManager.del(`fixed_asset:${depreciationData.assetId}`);\n      await this.cacheManager.del(`depreciation_schedule:${depreciationData.assetId}`);\n      await this.clearAssetCaches();\n      \n      this.logger.log(`Depreciation recorded for asset ${depreciationData.assetId}`);\n      return response.data;\n    } catch (error) {\n      this.logger.error('Failed to record depreciation', error.response?.data || error.message);\n      throw error;\n    }\n  }\n\n  async getMaintenanceHistory(assetId: string): Promise<MaintenanceRecord[]> {\n    const cacheKey = `maintenance_history:${assetId}`;\n    const cached = await this.cacheManager.get<MaintenanceRecord[]>(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    try {\n      const response = await lastValueFrom(\n        this.httpService.get(`${this.serviceUrl}/assets/${assetId}/maintenance`)\n      );\n      \n      const history = response.data;\n      await this.cacheManager.set(cacheKey, history, 600000); // 10 minutes\n      \n      return history;\n    } catch (error) {\n      this.logger.error(`Failed to get maintenance history for asset ${assetId}`, error.message);\n      throw error;\n    }\n  }\n\n  async recordMaintenance(maintenanceData: {\n    assetId: string;\n    maintenanceType: 'PREVENTIVE' | 'CORRECTIVE' | 'EMERGENCY';\n    description: string;\n    cost: number;\n    maintenanceDate: string;\n    performedBy: string;\n    nextScheduledDate?: string;\n    notes?: string;\n    recordedBy: string;\n    recordedAt: string;\n  }): Promise<MaintenanceRecord> {\n    try {\n      // Validate asset exists\n      await this.getAssetById(maintenanceData.assetId);\n\n      const response = await lastValueFrom(\n        this.httpService.post(\n          `${this.serviceUrl}/assets/${maintenanceData.assetId}/maintenance`,\n          maintenanceData\n        )\n      );\n      \n      // Clear maintenance cache\n      await this.cacheManager.del(`maintenance_history:${maintenanceData.assetId}`);\n      \n      this.logger.log(`Maintenance recorded for asset ${maintenanceData.assetId}`);\n      return response.data;\n    } catch (error) {\n      this.logger.error('Failed to record maintenance', error.response?.data || error.message);\n      throw error;\n    }\n  }\n\n  async recordDisposal(disposalData: {\n    assetId: string;\n    disposalDate: string;\n    disposalMethod: 'SALE' | 'SCRAP' | 'DONATION' | 'TRADE_IN';\n    disposalValue: number;\n    buyerDetails?: string;\n    reason: string;\n    notes?: string;\n    disposedBy: string;\n    disposedAt: string;\n  }): Promise<any> {\n    try {\n      // Validate asset can be disposed\n      const asset = await this.getAssetById(disposalData.assetId);\n      \n      if (asset.status === 'DISPOSED') {\n        throw new BadRequestException('Asset is already disposed');\n      }\n\n      const response = await lastValueFrom(\n        this.httpService.post(\n          `${this.serviceUrl}/assets/${disposalData.assetId}/disposal`,\n          disposalData\n        )\n      );\n      \n      // Clear caches\n      await this.cacheManager.del(`fixed_asset:${disposalData.assetId}`);\n      await this.clearAssetCaches();\n      \n      this.logger.log(`Asset ${disposalData.assetId} disposed successfully`);\n      return response.data;\n    } catch (error) {\n      this.logger.error('Failed to record disposal', error.response?.data || error.message);\n      throw error;\n    }\n  }\n\n  async transferAsset(transferData: {\n    assetId: string;\n    fromDepartmentId?: string;\n    toDepartmentId?: string;\n    fromLocationId?: string;\n    toLocationId?: string;\n    transferDate: string;\n    reason: string;\n    notes?: string;\n    transferredBy: string;\n    transferredAt: string;\n  }): Promise<any> {\n    try {\n      // Validate asset exists and can be transferred\n      const asset = await this.getAssetById(transferData.assetId);\n      \n      if (asset.status !== 'ACTIVE') {\n        throw new BadRequestException('Can only transfer active assets');\n      }\n\n      const response = await lastValueFrom(\n        this.httpService.post(\n          `${this.serviceUrl}/assets/${transferData.assetId}/transfer`,\n          transferData\n        )\n      );\n      \n      // Clear caches\n      await this.cacheManager.del(`fixed_asset:${transferData.assetId}`);\n      await this.clearAssetCaches();\n      \n      this.logger.log(`Asset ${transferData.assetId} transferred successfully`);\n      return response.data;\n    } catch (error) {\n      this.logger.error('Failed to transfer asset', error.response?.data || error.message);\n      throw error;\n    }\n  }\n\n  async getDepreciationSummary(filters: {\n    periodId?: string;\n    category?: string;\n  }): Promise<any> {\n    const cacheKey = `depreciation_summary:${JSON.stringify(filters)}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    try {\n      const params = new URLSearchParams();\n      if (filters.periodId) params.append('periodId', filters.periodId);\n      if (filters.category) params.append('category', filters.category);\n      \n      const response = await lastValueFrom(\n        this.httpService.get(\n          `${this.serviceUrl}/reports/depreciation-summary?${params.toString()}`\n        )\n      );\n      \n      const summary = response.data;\n      await this.cacheManager.set(cacheKey, summary, 1800000); // 30 minutes\n      \n      return summary;\n    } catch (error) {\n      this.logger.error('Failed to get depreciation summary', error.message);\n      throw error;\n    }\n  }\n\n  async getAssetRegister(filters: {\n    asOfDate?: string;\n    category?: string;\n    departmentId?: string;\n  }): Promise<any> {\n    const cacheKey = `asset_register:${JSON.stringify(filters)}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    try {\n      const params = new URLSearchParams();\n      if (filters.asOfDate) params.append('asOfDate', filters.asOfDate);\n      if (filters.category) params.append('category', filters.category);\n      if (filters.departmentId) params.append('departmentId', filters.departmentId);\n      \n      const response = await lastValueFrom(\n        this.httpService.get(\n          `${this.serviceUrl}/reports/asset-register?${params.toString()}`\n        )\n      );\n      \n      const register = response.data;\n      await this.cacheManager.set(cacheKey, register, 1800000); // 30 minutes\n      \n      return register;\n    } catch (error) {\n      this.logger.error('Failed to get asset register', error.message);\n      throw error;\n    }\n  }\n\n  async getMaintenanceCosts(filters: {\n    fromDate?: string;\n    toDate?: string;\n    assetId?: string;\n  }): Promise<any> {\n    try {\n      const params = new URLSearchParams();\n      if (filters.fromDate) params.append('fromDate', filters.fromDate);\n      if (filters.toDate) params.append('toDate', filters.toDate);\n      if (filters.assetId) params.append('assetId', filters.assetId);\n      \n      const response = await lastValueFrom(\n        this.httpService.get(\n          `${this.serviceUrl}/reports/maintenance-costs?${params.toString()}`\n        )\n      );\n      \n      return response.data;\n    } catch (error) {\n      this.logger.error('Failed to get maintenance costs', error.message);\n      throw error;\n    }\n  }\n\n  async getAssetUtilization(filters: {\n    fromDate?: string;\n    toDate?: string;\n    departmentId?: string;\n    category?: string;\n  }): Promise<any> {\n    try {\n      const params = new URLSearchParams();\n      if (filters.fromDate) params.append('fromDate', filters.fromDate);\n      if (filters.toDate) params.append('toDate', filters.toDate);\n      if (filters.departmentId) params.append('departmentId', filters.departmentId);\n      if (filters.category) params.append('category', filters.category);\n      \n      const response = await lastValueFrom(\n        this.httpService.get(\n          `${this.serviceUrl}/reports/utilization?${params.toString()}`\n        )\n      );\n      \n      return response.data;\n    } catch (error) {\n      this.logger.error('Failed to get asset utilization', error.message);\n      throw error;\n    }\n  }\n\n  async getAssetValuation(asOfDate?: string): Promise<any> {\n    const cacheKey = `asset_valuation:${asOfDate || 'current'}`;\n    const cached = await this.cacheManager.get(cacheKey);\n    \n    if (cached) {\n      return cached;\n    }\n\n    try {\n      const params = new URLSearchParams();\n      if (asOfDate) params.append('asOfDate', asOfDate);\n      \n      const response = await lastValueFrom(\n        this.httpService.get(\n          `${this.serviceUrl}/reports/valuation?${params.toString()}`\n        )\n      );\n      \n      const valuation = response.data;\n      await this.cacheManager.set(cacheKey, valuation, 1800000); // 30 minutes\n      \n      return valuation;\n    } catch (error) {\n      this.logger.error('Failed to get asset valuation', error.message);\n      throw error;\n    }\n  }\n\n  private async clearAssetCaches(): Promise<void> {\n    // In a real implementation, you'd use cache patterns or tags\n    this.logger.debug('Clearing asset-related caches');\n  }\n}"
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import { Cache } from 'cache-manager';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Inject } from '@nestjs/common';
+import { lastValueFrom } from 'rxjs';
+
+export interface FixedAsset {
+  id: string;
+  assetNumber: string;
+  name: string;
+  description?: string;
+  category: string;
+  subCategory?: string;
+  acquisitionDate: string;
+  acquisitionCost: number;
+  currentValue: number;
+  accumulatedDepreciation: number;
+  netBookValue: number;
+  usefulLife: number;
+  salvageValue: number;
+  depreciationMethod: 'STRAIGHT_LINE' | 'DECLINING_BALANCE' | 'UNITS_OF_PRODUCTION';
+  status: 'ACTIVE' | 'DISPOSED' | 'UNDER_MAINTENANCE' | 'RETIRED';
+  locationId?: string;
+  departmentId?: string;
+  responsiblePersonId?: string;
+  serialNumber?: string;
+  model?: string;
+  manufacturer?: string;
+  warrantyExpiryDate?: string;
+  insuranceDetails?: any;
+  customFields?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  updatedBy?: string;
+}
+
+export interface DepreciationEntry {
+  id: string;
+  assetId: string;
+  depreciationDate: string;
+  periodId: string;
+  depreciationAmount: number;
+  accumulatedDepreciation: number;
+  netBookValue: number;
+  method: string;
+  isReversed: boolean;
+  journalEntryId?: string;
+  notes?: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+export interface MaintenanceRecord {
+  id: string;
+  assetId: string;
+  maintenanceType: 'PREVENTIVE' | 'CORRECTIVE' | 'EMERGENCY';
+  description: string;
+  cost: number;
+  maintenanceDate: string;
+  performedBy: string;
+  nextScheduledDate?: string;
+  status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+  notes?: string;
+  attachments?: string[];
+  createdAt: string;
+  createdBy: string;
+}
+
+@Injectable()
+export class FixedAssetsService {
+  private readonly logger = new Logger(FixedAssetsService.name);
+  private readonly serviceUrl: string;
+
+  constructor(
+    private httpService: HttpService,
+    private configService: ConfigService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+  ) {
+    this.serviceUrl = this.configService.get('FIXED_ASSETS_SERVICE_URL', 'http://localhost:3006');
+  }
+
+  async getAssetById(assetId: string): Promise<FixedAsset> {
+    const cacheKey = `fixed_asset:${assetId}`;
+    const cached = await this.cacheManager.get<FixedAsset>(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.httpService.get(`${this.serviceUrl}/assets/${assetId}`)
+      );
+      
+      const asset = response.data;
+      await this.cacheManager.set(cacheKey, asset, 600000); // 10 minutes
+      
+      return asset;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException(`Fixed asset with ID ${assetId} not found`);
+      }
+      throw error;
+    }
+  }
+
+  async updateAsset(assetId: string, assetData: Partial<FixedAsset>): Promise<FixedAsset> {
+    try {
+      const response = await lastValueFrom(
+        this.httpService.put(`${this.serviceUrl}/assets/${assetId}`, assetData)
+      );
+      
+      // Clear cache
+      await this.cacheManager.del(`fixed_asset:${assetId}`);
+      await this.clearAssetCaches();
+      
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`Failed to update asset ${assetId}`, error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async deleteAsset(assetId: string): Promise<void> {
+    // First check if asset can be deleted (no transactions, not disposed, etc.)
+    const asset = await this.getAssetById(assetId);
+    
+    if (asset.status === 'DISPOSED') {
+      throw new BadRequestException('Cannot delete disposed asset');
+    }
+
+    // Check for existing depreciation entries
+    const depreciationEntries = await this.getDepreciationEntries(assetId);
+    if (depreciationEntries.length > 0) {
+      throw new BadRequestException('Cannot delete asset with depreciation entries');
+    }
+
+    try {
+      await lastValueFrom(
+        this.httpService.delete(`${this.serviceUrl}/assets/${assetId}`)
+      );
+      
+      // Clear caches
+      await this.cacheManager.del(`fixed_asset:${assetId}`);
+      await this.clearAssetCaches();
+      
+      this.logger.log(`Asset ${assetId} deleted successfully`);
+    } catch (error: any) {
+      this.logger.error(`Failed to delete asset ${assetId}`, error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async getDepreciationSchedule(assetId: string): Promise<any> {
+    const cacheKey = `depreciation_schedule:${assetId}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.httpService.get(`${this.serviceUrl}/assets/${assetId}/depreciation/schedule`)
+      );
+      
+      const schedule = response.data;
+      await this.cacheManager.set(cacheKey, schedule, 1800000); // 30 minutes
+      
+      return schedule;
+    } catch (error: any) {
+      this.logger.error(`Failed to get depreciation schedule for asset ${assetId}`, error.message);
+      throw error;
+    }
+  }
+
+  async getDepreciationEntries(assetId: string): Promise<DepreciationEntry[]> {
+    try {
+      const response = await lastValueFrom(
+        this.httpService.get(`${this.serviceUrl}/assets/${assetId}/depreciation/entries`)
+      );
+      
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`Failed to get depreciation entries for asset ${assetId}`, error.message);
+      throw error;
+    }
+  }
+
+  async recordDepreciation(depreciationData: {
+    assetId: string;
+    amount: number;
+    depreciationDate: string;
+    periodId: string;
+    notes?: string;
+    recordedBy: string;
+    recordedAt: string;
+  }): Promise<DepreciationEntry> {
+    try {
+      // Validate asset exists and is active
+      const asset = await this.getAssetById(depreciationData.assetId);
+      
+      if (asset.status !== 'ACTIVE') {
+        throw new BadRequestException('Can only record depreciation for active assets');
+      }
+
+      // Check if depreciation would exceed asset cost
+      const currentAccumulated = asset.accumulatedDepreciation;
+      const newAccumulated = currentAccumulated + depreciationData.amount;
+      const maxDepreciation = asset.acquisitionCost - asset.salvageValue;
+      
+      if (newAccumulated > maxDepreciation) {
+        throw new BadRequestException(
+          `Depreciation amount would exceed maximum depreciable amount of ${maxDepreciation}`
+        );
+      }
+
+      const response = await lastValueFrom(
+        this.httpService.post(
+          `${this.serviceUrl}/assets/${depreciationData.assetId}/depreciation/record`,
+          depreciationData
+        )
+      );
+      
+      // Clear related caches
+      await this.cacheManager.del(`fixed_asset:${depreciationData.assetId}`);
+      await this.cacheManager.del(`depreciation_schedule:${depreciationData.assetId}`);
+      await this.clearAssetCaches();
+      
+      this.logger.log(`Depreciation recorded for asset ${depreciationData.assetId}`);
+      return response.data;
+    } catch (error: any) {
+      this.logger.error('Failed to record depreciation', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async getMaintenanceHistory(assetId: string): Promise<MaintenanceRecord[]> {
+    const cacheKey = `maintenance_history:${assetId}`;
+    const cached = await this.cacheManager.get<MaintenanceRecord[]>(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.httpService.get(`${this.serviceUrl}/assets/${assetId}/maintenance`)
+      );
+      
+      const history = response.data;
+      await this.cacheManager.set(cacheKey, history, 600000); // 10 minutes
+      
+      return history;
+    } catch (error: any) {
+      this.logger.error(`Failed to get maintenance history for asset ${assetId}`, error.message);
+      throw error;
+    }
+  }
+
+  async recordMaintenance(maintenanceData: {
+    assetId: string;
+    maintenanceType: 'PREVENTIVE' | 'CORRECTIVE' | 'EMERGENCY';
+    description: string;
+    cost: number;
+    maintenanceDate: string;
+    performedBy: string;
+    nextScheduledDate?: string;
+    notes?: string;
+    recordedBy: string;
+    recordedAt: string;
+  }): Promise<MaintenanceRecord> {
+    try {
+      // Validate asset exists
+      await this.getAssetById(maintenanceData.assetId);
+
+      const response = await lastValueFrom(
+        this.httpService.post(
+          `${this.serviceUrl}/assets/${maintenanceData.assetId}/maintenance`,
+          maintenanceData
+        )
+      );
+      
+      // Clear maintenance cache
+      await this.cacheManager.del(`maintenance_history:${maintenanceData.assetId}`);
+      
+      this.logger.log(`Maintenance recorded for asset ${maintenanceData.assetId}`);
+      return response.data;
+    } catch (error: any) {
+      this.logger.error('Failed to record maintenance', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async recordDisposal(disposalData: {
+    assetId: string;
+    disposalDate: string;
+    disposalMethod: 'SALE' | 'SCRAP' | 'DONATION' | 'TRADE_IN';
+    disposalValue: number;
+    buyerDetails?: string;
+    reason: string;
+    notes?: string;
+    disposedBy: string;
+    disposedAt: string;
+  }): Promise<any> {
+    try {
+      // Validate asset can be disposed
+      const asset = await this.getAssetById(disposalData.assetId);
+      
+      if (asset.status === 'DISPOSED') {
+        throw new BadRequestException('Asset is already disposed');
+      }
+
+      const response = await lastValueFrom(
+        this.httpService.post(
+          `${this.serviceUrl}/assets/${disposalData.assetId}/disposal`,
+          disposalData
+        )
+      );
+      
+      // Clear caches
+      await this.cacheManager.del(`fixed_asset:${disposalData.assetId}`);
+      await this.clearAssetCaches();
+      
+      this.logger.log(`Asset ${disposalData.assetId} disposed successfully`);
+      return response.data;
+    } catch (error: any) {
+      this.logger.error('Failed to record disposal', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async transferAsset(transferData: {
+    assetId: string;
+    fromDepartmentId?: string;
+    toDepartmentId?: string;
+    fromLocationId?: string;
+    toLocationId?: string;
+    transferDate: string;
+    reason: string;
+    notes?: string;
+    transferredBy: string;
+    transferredAt: string;
+  }): Promise<any> {
+    try {
+      // Validate asset exists and can be transferred
+      const asset = await this.getAssetById(transferData.assetId);
+      
+      if (asset.status !== 'ACTIVE') {
+        throw new BadRequestException('Can only transfer active assets');
+      }
+
+      const response = await lastValueFrom(
+        this.httpService.post(
+          `${this.serviceUrl}/assets/${transferData.assetId}/transfer`,
+          transferData
+        )
+      );
+      
+      // Clear caches
+      await this.cacheManager.del(`fixed_asset:${transferData.assetId}`);
+      await this.clearAssetCaches();
+      
+      this.logger.log(`Asset ${transferData.assetId} transferred successfully`);
+      return response.data;
+    } catch (error: any) {
+      this.logger.error('Failed to transfer asset', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async getDepreciationSummary(filters: {
+    periodId?: string;
+    category?: string;
+  }): Promise<any> {
+    const cacheKey = `depreciation_summary:${JSON.stringify(filters)}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const params = new URLSearchParams();
+      if (filters.periodId) params.append('periodId', filters.periodId);
+      if (filters.category) params.append('category', filters.category);
+      
+      const response = await lastValueFrom(
+        this.httpService.get(
+          `${this.serviceUrl}/reports/depreciation-summary?${params.toString()}`
+        )
+      );
+      
+      const summary = response.data;
+      await this.cacheManager.set(cacheKey, summary, 1800000); // 30 minutes
+      
+      return summary;
+    } catch (error: any) {
+      this.logger.error('Failed to get depreciation summary', error.message);
+      throw error;
+    }
+  }
+
+  async getAssetRegister(filters: {
+    asOfDate?: string;
+    category?: string;
+    departmentId?: string;
+  }): Promise<any> {
+    const cacheKey = `asset_register:${JSON.stringify(filters)}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const params = new URLSearchParams();
+      if (filters.asOfDate) params.append('asOfDate', filters.asOfDate);
+      if (filters.category) params.append('category', filters.category);
+      if (filters.departmentId) params.append('departmentId', filters.departmentId);
+      
+      const response = await lastValueFrom(
+        this.httpService.get(
+          `${this.serviceUrl}/reports/asset-register?${params.toString()}`
+        )
+      );
+      
+      const register = response.data;
+      await this.cacheManager.set(cacheKey, register, 1800000); // 30 minutes
+      
+      return register;
+    } catch (error: any) {
+      this.logger.error('Failed to get asset register', error.message);
+      throw error;
+    }
+  }
+
+  async getMaintenanceCosts(filters: {
+    fromDate?: string;
+    toDate?: string;
+    assetId?: string;
+  }): Promise<any> {
+    try {
+      const params = new URLSearchParams();
+      if (filters.fromDate) params.append('fromDate', filters.fromDate);
+      if (filters.toDate) params.append('toDate', filters.toDate);
+      if (filters.assetId) params.append('assetId', filters.assetId);
+      
+      const response = await lastValueFrom(
+        this.httpService.get(
+          `${this.serviceUrl}/reports/maintenance-costs?${params.toString()}`
+        )
+      );
+      
+      return response.data;
+    } catch (error: any) {
+      this.logger.error('Failed to get maintenance costs', error.message);
+      throw error;
+    }
+  }
+
+  async getAssetUtilization(filters: {
+    fromDate?: string;
+    toDate?: string;
+    departmentId?: string;
+    category?: string;
+  }): Promise<any> {
+    try {
+      const params = new URLSearchParams();
+      if (filters.fromDate) params.append('fromDate', filters.fromDate);
+      if (filters.toDate) params.append('toDate', filters.toDate);
+      if (filters.departmentId) params.append('departmentId', filters.departmentId);
+      if (filters.category) params.append('category', filters.category);
+      
+      const response = await lastValueFrom(
+        this.httpService.get(
+          `${this.serviceUrl}/reports/utilization?${params.toString()}`
+        )
+      );
+      
+      return response.data;
+    } catch (error: any) {
+      this.logger.error('Failed to get asset utilization', error.message);
+      throw error;
+    }
+  }
+
+  async getAssetValuation(asOfDate?: string): Promise<any> {
+    const cacheKey = `asset_valuation:${asOfDate || 'current'}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const params = new URLSearchParams();
+      if (asOfDate) params.append('asOfDate', asOfDate);
+      
+      const response = await lastValueFrom(
+        this.httpService.get(
+          `${this.serviceUrl}/reports/valuation?${params.toString()}`
+        )
+      );
+      
+      const valuation = response.data;
+      await this.cacheManager.set(cacheKey, valuation, 1800000); // 30 minutes
+      
+      return valuation;
+    } catch (error: any) {
+      this.logger.error('Failed to get asset valuation', error.message);
+      throw error;
+    }
+  }
+
+  private async clearAssetCaches(): Promise<void> {
+    // In a real implementation, you'd use cache patterns or tags
+    this.logger.debug('Clearing asset-related caches');
+  }
+}

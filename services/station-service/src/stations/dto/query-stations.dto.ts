@@ -1,7 +1,7 @@
 import { IsOptional, IsEnum, IsString, IsBoolean, IsInt, Min, Max, IsNumber } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Type, Transform } from 'class-transformer';
-import { StationStatus } from '@omc-erp/shared-types';
+import { StationStatus } from '../../../../../packages/shared-types/src/enums';
 
 export class QueryStationsDto {
   @ApiProperty({ required: false, minimum: 1, default: 1 })

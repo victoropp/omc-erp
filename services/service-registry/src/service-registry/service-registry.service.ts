@@ -1,9 +1,8 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { Cache } from 'cache-manager';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
+import { CacheService } from '../common/cache.service';
 import { RegisterServiceDto, ServiceStatus, ServiceType } from './dto/register-service.dto';
 import { ServiceInstance, ServiceHealth, ServiceMetrics } from './entities/service.entity';
 
@@ -16,7 +15,7 @@ export class ServiceRegistryService {
   private readonly METRICS_PREFIX = 'metrics:';
 
   constructor(
-    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private cacheService: CacheService,
   ) {}
 
   /**
@@ -28,6 +27,12 @@ export class ServiceRegistryService {
     const service: ServiceInstance = {
       id: serviceId,
       ...registerDto,
+      healthEndpoint: registerDto.healthEndpoint || '/health',
+      tags: registerDto.tags || [],
+      metadata: registerDto.metadata || {},
+      dependencies: registerDto.dependencies || [],
+      weight: registerDto.weight || 100,
+      environment: registerDto.environment || process.env.NODE_ENV || 'development',
       status: ServiceStatus.STARTING,
       registeredAt: new Date(),
       lastHeartbeat: new Date(),
@@ -36,18 +41,18 @@ export class ServiceRegistryService {
     };
 
     // Store in cache
-    await this.cacheManager.set(`${this.SERVICE_PREFIX}${serviceId}`, service, 3600000); // 1 hour TTL
+    await this.cacheService.set(`${this.SERVICE_PREFIX}${serviceId}`, service, 3600000); // 1 hour TTL
     
     // Add to services registry
     const services = await this.getAllServices();
     services[serviceId] = service;
-    await this.cacheManager.set(this.SERVICES_KEY, services, 3600000);
+    await this.cacheService.set(this.SERVICES_KEY, services, 3600000);
 
     this.logger.log(`Service registered: ${service.name} (${serviceId})`);
     
     // Perform initial health check
     this.performHealthCheck(service).catch(err => 
-      this.logger.warn(`Initial health check failed for ${service.name}: ${err.message}`)
+      this.logger.warn(`Initial health check failed for ${service.name}: ${(err as Error).message}`)
     );
 
     return service;
@@ -68,13 +73,13 @@ export class ServiceRegistryService {
 
     // Remove from registry after grace period
     setTimeout(async () => {
-      await this.cacheManager.del(`${this.SERVICE_PREFIX}${serviceId}`);
-      await this.cacheManager.del(`${this.HEALTH_PREFIX}${serviceId}`);
-      await this.cacheManager.del(`${this.METRICS_PREFIX}${serviceId}`);
+      await this.cacheService.del(`${this.SERVICE_PREFIX}${serviceId}`);
+      await this.cacheService.del(`${this.HEALTH_PREFIX}${serviceId}`);
+      await this.cacheService.del(`${this.METRICS_PREFIX}${serviceId}`);
       
       const services = await this.getAllServices();
       delete services[serviceId];
-      await this.cacheManager.set(this.SERVICES_KEY, services, 3600000);
+      await this.cacheService.set(this.SERVICES_KEY, services, 3600000);
     }, 30000); // 30 seconds grace period
 
     this.logger.log(`Service deregistered: ${service.name} (${serviceId})`);
@@ -103,7 +108,7 @@ export class ServiceRegistryService {
    * Get all registered services
    */
   async getAllServices(): Promise<Record<string, ServiceInstance>> {
-    const services = await this.cacheManager.get<Record<string, ServiceInstance>>(this.SERVICES_KEY);
+    const services = await this.cacheService.get<Record<string, ServiceInstance>>(this.SERVICES_KEY);
     return services || {};
   }
 
@@ -131,14 +136,14 @@ export class ServiceRegistryService {
    * Get service by ID
    */
   async getService(serviceId: string): Promise<ServiceInstance | null> {
-    return await this.cacheManager.get(`${this.SERVICE_PREFIX}${serviceId}`);
+    return await this.cacheService.get(`${this.SERVICE_PREFIX}${serviceId}`);
   }
 
   /**
    * Update service health
    */
   async updateServiceHealth(serviceId: string, health: ServiceHealth): Promise<void> {
-    await this.cacheManager.set(`${this.HEALTH_PREFIX}${serviceId}`, health, 300000); // 5 minutes TTL
+    await this.cacheService.set(`${this.HEALTH_PREFIX}${serviceId}`, health, 300000); // 5 minutes TTL
     
     const service = await this.getService(serviceId);
     if (service) {
@@ -159,21 +164,21 @@ export class ServiceRegistryService {
    * Get service health
    */
   async getServiceHealth(serviceId: string): Promise<ServiceHealth | null> {
-    return await this.cacheManager.get(`${this.HEALTH_PREFIX}${serviceId}`);
+    return await this.cacheService.get(`${this.HEALTH_PREFIX}${serviceId}`);
   }
 
   /**
    * Update service metrics
    */
   async updateServiceMetrics(serviceId: string, metrics: ServiceMetrics): Promise<void> {
-    await this.cacheManager.set(`${this.METRICS_PREFIX}${serviceId}`, metrics, 300000); // 5 minutes TTL
+    await this.cacheService.set(`${this.METRICS_PREFIX}${serviceId}`, metrics, 300000); // 5 minutes TTL
   }
 
   /**
    * Get service metrics
    */
   async getServiceMetrics(serviceId: string): Promise<ServiceMetrics | null> {
-    return await this.cacheManager.get(`${this.METRICS_PREFIX}${serviceId}`);
+    return await this.cacheService.get(`${this.METRICS_PREFIX}${serviceId}`);
   }
 
   /**
@@ -281,12 +286,12 @@ export class ServiceRegistryService {
         status: ServiceStatus.UNHEALTHY,
         timestamp: new Date(),
         responseTime,
-        error: error.message,
+        error: (error as Error).message,
       };
 
       await this.updateServiceHealth(service.id, health);
       
-      this.logger.warn(`Health check failed for ${service.name}: ${error.message}`);
+      this.logger.warn(`Health check failed for ${service.name}: ${(error as Error).message}`);
     }
   }
 
@@ -294,11 +299,11 @@ export class ServiceRegistryService {
    * Update service in cache
    */
   private async updateService(service: ServiceInstance): Promise<void> {
-    await this.cacheManager.set(`${this.SERVICE_PREFIX}${service.id}`, service, 3600000);
+    await this.cacheService.set(`${this.SERVICE_PREFIX}${service.id}`, service, 3600000);
     
     const services = await this.getAllServices();
     services[service.id] = service;
-    await this.cacheManager.set(this.SERVICES_KEY, services, 3600000);
+    await this.cacheService.set(this.SERVICES_KEY, services, 3600000);
   }
 
   /**

@@ -60,14 +60,16 @@ export class HealthController {
         const systemStats = await this.metricsService.getSystemStats();
         const isReady = systemStats.system.memory.heapUsed < 200; // Less than 200MB heap usage
         
+        const status = isReady ? 'up' : 'down';
         return {
-          key: 'api_gateway',
-          status: isReady ? 'up' : 'down',
-          message: isReady ? 'Ready to serve traffic' : 'High memory usage',
-          details: {
-            heapUsed: systemStats.system.memory.heapUsed,
-            uptime: systemStats.system.uptime,
-          },
+          ['api_gateway']: {
+            status,
+            message: isReady ? 'Ready to serve traffic' : 'High memory usage',
+            details: {
+              heapUsed: systemStats.system.memory.heapUsed,
+              uptime: systemStats.system.uptime,
+            },
+          }
         };
       },
     ]);

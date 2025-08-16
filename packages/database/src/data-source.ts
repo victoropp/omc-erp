@@ -23,13 +23,24 @@ dotenv.config();
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  username: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
-  database: process.env.DB_NAME || 'omc_erp_dev',
+  host: process.env.DB_HOST || process.env.DATABASE_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT || process.env.DATABASE_PORT || '5434'),
+  username: process.env.DB_USER || process.env.DATABASE_USERNAME || 'postgres',
+  password: process.env.DB_PASSWORD || process.env.DATABASE_PASSWORD || 'postgres',
+  database: process.env.DB_NAME || process.env.DATABASE_NAME || 'omc_erp',
   synchronize: false, // Never use true in production
   logging: process.env.NODE_ENV === 'development',
+  // Connection pool configuration
+  extra: {
+    connectionLimit: 20,
+    acquireTimeout: 60000,
+    timeout: 60000,
+    reconnect: true,
+    charset: 'utf8mb4_unicode_ci',
+  },
+  // Connection timeout and retry settings
+  connectTimeoutMS: 10000,
+  maxQueryExecutionTime: 30000,
   entities: [
     User,
     Tenant,
@@ -53,18 +64,35 @@ export const AppDataSource = new DataSource({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
-// Initialize the data source
-export const initializeDatabase = async (): Promise<DataSource> => {
-  try {
-    if (!AppDataSource.isInitialized) {
-      await AppDataSource.initialize();
-      console.log('Data Source has been initialized!');
+// Initialize the data source with retry logic
+export const initializeDatabase = async (maxRetries: number = 5, delay: number = 5000): Promise<DataSource> => {
+  let retries = 0;
+  
+  while (retries < maxRetries) {
+    try {
+      if (!AppDataSource.isInitialized) {
+        await AppDataSource.initialize();
+        console.log('Data Source has been initialized!');
+      }
+      return AppDataSource;
+    } catch (error) {
+      retries++;
+      console.error(`Error during Data Source initialization (attempt ${retries}/${maxRetries}):`, error);
+      
+      if (retries >= maxRetries) {
+        console.error('Max retry attempts reached. Database initialization failed.');
+        throw error;
+      }
+      
+      console.log(`Retrying database connection in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      // Exponential backoff
+      delay = Math.min(delay * 1.5, 30000);
     }
-    return AppDataSource;
-  } catch (error) {
-    console.error('Error during Data Source initialization:', error);
-    throw error;
   }
+  
+  throw new Error('Failed to initialize database after maximum retry attempts');
 };
 
 // Close the data source

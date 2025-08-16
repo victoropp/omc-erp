@@ -170,7 +170,7 @@ export interface FileUpload {
 export interface IPaymentService {
   processPayment(options: PaymentOptions): Promise<PaymentResult>;
   refund(transactionId: string, amount?: number): Promise<RefundResult>;
-  getStatus(transactionId: string): Promise<PaymentStatus>;
+  getStatus(transactionId: string): Promise<PaymentStatusInfo>;
 }
 
 export interface PaymentOptions {
@@ -198,7 +198,7 @@ export interface RefundResult {
   message?: string;
 }
 
-export interface PaymentStatus {
+export interface PaymentStatusInfo {
   transactionId: string;
   status: string;
   amount: number;
